@@ -37,9 +37,12 @@ final class MusicSmokeTests: XCTestCase {
         wait(for: [playing, advancing], timeout: 15)
         screenshot("全屏播放")
 
-        let swipeStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
+        let swipeStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
         let swipeEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.86))
         swipeStart.press(forDuration: 0.05, thenDragTo: swipeEnd)
+        let playerSheet = app.buttons["收起播放器"]
+        let dismissed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: playerSheet)
+        wait(for: [dismissed], timeout: 8)
         let miniPlayer = app.buttons["打开迷你播放器"]
         XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5))
         screenshot("迷你播放条")

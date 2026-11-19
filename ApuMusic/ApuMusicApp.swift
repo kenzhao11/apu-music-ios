@@ -32,8 +32,11 @@ struct MusicShell: View {
                             Text(player.current?.singer ?? "").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                         }
                         }.foregroundStyle(.white)
-                    }.buttonStyle(.plain)
-                        .accessibilityIdentifier("打开迷你播放器")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("打开迷你播放器")
+                    .accessibilityIdentifier("打开迷你播放器")
                     Spacer(minLength: 0)
                     Button { Task { await player.previous() } } label: { Image(systemName: "backward.end.fill") }
                     Button { player.toggle() } label: { Image(systemName: player.isPlaying ? "pause.fill" : "play.fill") }
