@@ -67,7 +67,10 @@ jobs:
           xcrun assetutil --info "$APP/Assets.car" | grep -q AppIcon
           /usr/bin/zip -qry "$IPA" Payload
           xcrun simctl list devices available -j > available-devices.json
-          DEVICE=$(python3 -c 'import json; d=json.load(open("available-devices.json")); print(next(x["udid"] for v in d["devices"].values() for x in v if x["name"].startswith("iPhone 15 Pro") and x["isAvailable"]))')
+          DEVICE_INFO=$(python3 -c 'import json; d=json.load(open("available-devices.json")); xs=[x for v in d["devices"].values() for x in v if x["isAvailable"] and x["name"].startswith("iPhone")]; x=next((x for x in xs if x["name"].startswith("iPhone 15 Pro")), xs[0] if xs else None); print((x["udid"]+" "+x["name"]) if x else "")')
+          test -n "$DEVICE_INFO"
+          DEVICE=${DEVICE_INFO%% *}
+          echo "Screenshot simulator: ${DEVICE_INFO#* }" | tee simulator-device.log
           xcrun simctl boot "$DEVICE" 2>/dev/null || true
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl status_bar "$DEVICE" override --time '9:41' --batteryState charged --batteryLevel 100
@@ -96,5 +99,6 @@ jobs:
             ApuMusic-0.1.0-build3-unsigned.ipa
             ApuMusic-0.1.0-build3-unsigned.ipa.sha256
             screenshots/build3-home-iphone-15-pro.png
+            simulator-device.log
           if-no-files-found: error
           retention-days: 14
