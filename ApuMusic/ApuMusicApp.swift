@@ -145,7 +145,7 @@ struct HomeScreen: View {
             let collection: PlaylistResponse = try await MusicAPI.get("local/imported-playlists")
             playlists = collection.playlists
             error = tracks.isEmpty ? "暂时没有推荐歌曲" : ""
-        } catch { error = "暂时无法加载内容，请下拉重试。" }
+        } catch { self.error = "暂时无法加载内容，请下拉重试。" }
     }
 }
 
@@ -215,7 +215,7 @@ struct SearchScreen: View {
             if let list = try? JSONDecoder().decode([Track].self, from: data) { tracks = list }
             else { tracks = try JSONDecoder().decode(SearchResponse.self, from: data).tracks }
             error = tracks.isEmpty ? "没有找到歌曲" : ""
-        } catch { tracks = []; error = "搜索暂时不可用" }
+        } catch { tracks = []; self.error = "搜索暂时不可用" }
     }
 }
 
