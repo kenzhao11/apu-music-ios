@@ -19,7 +19,7 @@ final class MusicModelTests: XCTestCase {
 
         XCTAssertEqual(json["selected_id"] as? String, "2138")
         XCTAssertEqual(json["include_cover"] as? Bool, false)
-        XCTAssertEqual(json["quality"] as? String, "high")
+        XCTAssertEqual(json["quality"] as? String, "low")
         XCTAssertTrue(json.keys.contains("streaming_mode"))
         XCTAssertNil(json["streaming_mode"] as? String)
     }
@@ -30,6 +30,31 @@ final class MusicModelTests: XCTestCase {
 
         XCTAssertEqual(track.playbackSelectionID, "2138")
         XCTAssertEqual(track.sourceId, "002Il7Ya1tZ6UZ")
+    }
+
+    func testSearchResultsMergeSourcesButKeepDistinctSongsDistinct() throws {
+        let tracks = [
+            Track(id: "tencent--2138--high", platform: "tencent", song: "Hello", singer: "Adele",
+                  duration: 295, sourceId: "provider-1", selectedId: "2138"),
+            Track(id: "netease--3--high", platform: "netease", song: " hello ", singer: "ADELE",
+                  duration: 296, sourceId: "provider-2", selectedId: "3"),
+            Track(id: "kugou--7--high", platform: "kugou", song: "Hello", singer: "Adele",
+                  duration: 333, selectedId: "7")
+        ]
+
+        let merged = TrackDeduplicator.merge(tracks)
+
+        XCTAssertEqual(merged.count, 2)
+        XCTAssertEqual(merged[0].sources.count, 2)
+        XCTAssertEqual(merged[0].sources.map(\.platform), ["tencent", "netease"])
+    }
+
+    func testUnplayableTrackNeverGetsAFallbackPlaybackCandidate() throws {
+        let data = Data(#"{"id":"unavailable","platform":"tencent","song":"Hello","singer":"Adele","playback_candidates":[],"playable":false}"#.utf8)
+        let track = try JSONDecoder().decode(Track.self, from: data)
+
+        XCTAssertFalse(track.canPlay)
+        XCTAssertTrue(track.sources.isEmpty)
     }
 
     func testPlaybackSelectionUsesSelectedIDWhenSearchRowsHavePlaybackMetadataIDs() throws {

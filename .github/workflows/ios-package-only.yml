@@ -20,6 +20,14 @@ jobs:
       - name: Generate project
         run: xcodegen generate
 
+      - name: Verify iPhone app metadata
+        run: |
+          set -euo pipefail
+          grep -q 'TARGETED_DEVICE_FAMILY = 1;' ApuMusic.xcodeproj/project.pbxproj
+          grep -q 'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;' ApuMusic.xcodeproj/project.pbxproj
+          /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen:UIColorName' ApuMusic/Info.plist | grep -q LaunchBackground
+          /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen:UIImageName' ApuMusic/Info.plist | grep -q ApuMascot
+
       - name: Build Release for device
         run: |
           set -euo pipefail
@@ -45,14 +53,48 @@ jobs:
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
           BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
           IPA="ApuMusic-${VERSION}-build${BUILD}-unsigned.ipa"
+          /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily' "$APP/Info.plist"
+          sips -s format png -s formatOptions 100 --resampleWidth 120 --resampleHeight 120 ApuMusic/Assets.xcassets/AppIcon.appiconset/AppIcon.png --out "$APP/AppIcon60x60@2x.png" >/dev/null
+          test -f "$APP/AppIcon60x60@2x.png"
+          test -f "$APP/Assets.car"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$APP/Info.plist" | grep -q AppIcon
+          /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily' "$APP/Info.plist" | grep -q 1
+          /usr/libexec/PlistBuddy -c 'Print :UIRequiresFullScreen' "$APP/Info.plist" | grep -q true
+          /usr/libexec/PlistBuddy -c 'Print :UISupportedInterfaceOrientations:0' "$APP/Info.plist" | grep -q Portrait
+          xcrun --find assetutil >/dev/null
+          xcrun assetutil --info "$APP/Assets.car" | grep -q AppIcon
           /usr/bin/zip -qry "$IPA" Payload
+          xcrun simctl list devices available -j > available-devices.json
+          DEVICE=$(python3 -c 'import json; d=json.load(open("available-devices.json")); print(next(x["udid"] for v in d["devices"].values() for x in v if x["name"].startswith("iPhone 15 Pro") and x["isAvailable"]))')
+          xcrun simctl boot "$DEVICE" 2>/dev/null || true
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl status_bar "$DEVICE" override --time '9:41' --batteryState charged --batteryLevel 100
+          python3 scripts/uitest_api_stub.py --port 18765 > api-stub.log 2>&1 &
+          STUB_PID=$!
+          trap 'kill "$STUB_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 40); do
+            if curl --silent --fail http://127.0.0.1:18765/health >/dev/null; then break; fi
+            sleep 0.25
+          done
+          curl --silent --fail http://127.0.0.1:18765/health >/dev/null
+          xcrun simctl spawn "$DEVICE" defaults write -g AVAudioSessionSilenceOutput -bool YES
+          xcrun simctl install "$DEVICE" "$APP"
+          xcrun simctl launch --terminate-running-process "$DEVICE" fr.kdns.kenmusic.apu -ui-testing -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN
+          sleep 4
+          mkdir -p screenshots
+          xcrun simctl io "$DEVICE" screenshot screenshots/build3-home-iphone-15-pro.png
+          file "$APP/AppIcon60x60@2x.png" "$APP/Assets.car" screenshots/build3-home-iphone-15-pro.png
           shasum -a 256 "$IPA" > "$IPA.sha256"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ApuMusic-0.1.0-build2-unsigned-package-only
+          name: ApuMusic-0.1.0-build3-unsigned-package-only
           path: |
-            ApuMusic-0.1.0-build2-unsigned.ipa
-            ApuMusic-0.1.0-build2-unsigned.ipa.sha256
+            ApuMusic-0.1.0-build3-unsigned.ipa
+            ApuMusic-0.1.0-build3-unsigned.ipa.sha256
+            screenshots/build3-home-iphone-15-pro.png
+          if-no-files-found: error
           retention-days: 14

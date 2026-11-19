@@ -3,9 +3,12 @@ import Foundation
 enum MusicAPI {
     static let base: URL = {
         let environment = ProcessInfo.processInfo.environment
-        if environment["UITEST_MODE"] == "1",
-           let local = environment["APU_API_BASE_URL"], let url = URL(string: local) {
-            return url
+        if environment["UITEST_MODE"] == "1" || ProcessInfo.processInfo.arguments.contains("-ui-testing") {
+            if let local = environment["APU_API_BASE_URL"], let url = URL(string: local),
+               url.host == "127.0.0.1" || url.host == "localhost" {
+                return url
+            }
+            return URL(string: "http://127.0.0.1:18765/api/v1")!
         }
         return URL(string: "https://kenmusic.kdns.fr/api/v1")!
     }()
@@ -46,6 +49,16 @@ enum MusicAPI {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
         return try await playbackResponse(for: request)
+    }
+
+    static func searchTracks(_ query: String) async throws -> [Track] {
+        var components = URLComponents(url: try endpoint("search"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [.init(name: "q", value: query), .init(name: "limit", value: "50")]
+        guard let url = components.url else { throw URLError(.badURL) }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+        if let tracks = try? JSONDecoder().decode([Track].self, from: data) { return tracks }
+        return try JSONDecoder().decode(SearchResponse.self, from: data).tracks
     }
 
     static func playbackStatus(id: String, since: String) async throws -> PlaybackStatusResponse {
@@ -100,6 +113,7 @@ struct Track: Codable, Identifiable, Hashable {
     var cover: String?
     var sourceId: String?
     var selectedId: String?
+    var playbackCandidates: [PlaybackCandidate]?
     var playable: Bool?
     var status: String?
 
@@ -107,6 +121,7 @@ struct Track: Codable, Identifiable, Hashable {
         case id, platform, song, singer, album, duration, cover, playable, status
         case sourceId = "source_id"
         case selectedId = "selected_id"
+        case playbackCandidates = "playback_candidates"
     }
 
     init(from decoder: Decoder) throws {
@@ -124,6 +139,7 @@ struct Track: Codable, Identifiable, Hashable {
         cover = try values.decodeIfPresent(String.self, forKey: .cover)
         sourceId = try values.decodeIfPresent(String.self, forKey: .sourceId)
         selectedId = try values.decodeIfPresent(String.self, forKey: .selectedId)
+        playbackCandidates = try values.decodeIfPresent([PlaybackCandidate].self, forKey: .playbackCandidates)
         playable = try values.decodeIfPresent(Bool.self, forKey: .playable)
         status = try values.decodeIfPresent(String.self, forKey: .status)
     }
@@ -139,13 +155,15 @@ struct Track: Codable, Identifiable, Hashable {
         try values.encodeIfPresent(cover, forKey: .cover)
         try values.encodeIfPresent(sourceId, forKey: .sourceId)
         try values.encodeIfPresent(selectedId, forKey: .selectedId)
+        try values.encodeIfPresent(playbackCandidates, forKey: .playbackCandidates)
         try values.encodeIfPresent(playable, forKey: .playable)
         try values.encodeIfPresent(status, forKey: .status)
     }
 
     init(id: String, platform: String, song: String, singer: String,
          album: String? = nil, duration: Double? = nil, cover: String? = nil,
-         sourceId: String? = nil, selectedId: String? = nil, playable: Bool? = nil, status: String? = nil) {
+         sourceId: String? = nil, selectedId: String? = nil, playbackCandidates: [PlaybackCandidate]? = nil,
+         playable: Bool? = nil, status: String? = nil) {
         self.id = id
         self.platform = platform
         self.song = song
@@ -155,12 +173,21 @@ struct Track: Codable, Identifiable, Hashable {
         self.cover = cover
         self.sourceId = sourceId
         self.selectedId = selectedId
+        self.playbackCandidates = playbackCandidates
         self.playable = playable
         self.status = status
     }
 
-    var canPlay: Bool { playable != false && status != "missing" && !platform.isEmpty }
+    var canPlay: Bool {
+        if let playbackCandidates { return !playbackCandidates.isEmpty }
+        return playable != false && status != "missing" && !platform.isEmpty
+    }
     var playbackSelectionID: String { selectedId ?? id.components(separatedBy: "--").dropFirst().first ?? id }
+    var sources: [PlaybackCandidate] {
+        if let playbackCandidates { return playbackCandidates }
+        guard canPlay else { return [] }
+        return [PlaybackCandidate(platform: platform, selectedID: playbackSelectionID, sourceID: sourceId)]
+    }
     var artwork: URL? { cover.flatMap(URL.init(string:)) }
     var thumbnail: URL? {
         guard let artwork else { return nil }
@@ -183,12 +210,106 @@ struct Track: Codable, Identifiable, Hashable {
     }
 
     static func == (lhs: Track, rhs: Track) -> Bool {
-        lhs.platform == rhs.platform && lhs.id == rhs.id
+        lhs.id == rhs.id
     }
 
     func hash(into hasher: inout Hasher) {
-        hasher.combine(platform)
         hasher.combine(id)
+    }
+}
+
+struct PlaybackCandidate: Codable, Hashable {
+    var platform: String
+    var selectedID: String
+    var sourceID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case platform
+        case selectedID = "selected_id"
+        case sourceID = "source_id"
+    }
+}
+
+enum TrackDeduplicator {
+    static func merge(_ tracks: [Track]) -> [Track] {
+        var result: [Track] = []
+        for track in tracks {
+            guard let index = result.firstIndex(where: { sameSong($0, track) }) else {
+                var first = track
+                first.playbackCandidates = track.sources
+                result.append(first)
+                continue
+            }
+            let existing = result[index]
+            var candidates = existing.sources
+            for candidate in track.sources {
+                if let match = candidates.firstIndex(where: {
+                    $0.platform == candidate.platform && $0.selectedID == candidate.selectedID
+                }) {
+                    if candidates[match].sourceID == nil { candidates[match].sourceID = candidate.sourceID }
+                } else {
+                    candidates.append(candidate)
+                }
+            }
+            result[index].playbackCandidates = candidates
+            if (existing.cover?.isEmpty != false), let cover = track.cover, !cover.isEmpty {
+                result[index].cover = cover
+            }
+            if (existing.album?.isEmpty != false), let album = track.album, !album.isEmpty {
+                result[index].album = album
+            }
+            if existing.duration == nil { result[index].duration = track.duration }
+            result[index].playable = candidates.isEmpty ? false : true
+        }
+        return result
+    }
+
+    private static func sameSong(_ lhs: Track, _ rhs: Track) -> Bool {
+        if lhs.platform == rhs.platform && lhs.playbackSelectionID == rhs.playbackSelectionID { return true }
+        guard TrackText.normalized(lhs.song) == TrackText.normalized(rhs.song),
+              TrackText.normalized(lhs.singer) == TrackText.normalized(rhs.singer),
+              let leftDuration = lhs.duration, let rightDuration = rhs.duration else { return false }
+        return abs(leftDuration - rightDuration) <= 3
+    }
+
+}
+
+enum SearchGrouping {
+    static func groups(for tracks: [Track], query: String) -> [SearchGroup] {
+        let normalizedQuery = TrackText.normalized(query)
+        guard !normalizedQuery.isEmpty else { return [] }
+        let best = tracks.first {
+            TrackText.normalized($0.song) == normalizedQuery || TrackText.normalized($0.singer) == normalizedQuery
+        } ?? tracks.first
+        return [
+            SearchGroup(title: "最佳匹配", tracks: best.map { [$0] } ?? []),
+            SearchGroup(title: "歌曲", tracks: tracks),
+            SearchGroup(title: "专辑", names: unique(tracks.compactMap(\.album))),
+            SearchGroup(title: "歌手", names: unique(tracks.map(\.singer)))
+        ].filter { !$0.tracks.isEmpty || !$0.names.isEmpty }
+    }
+
+    private static func unique(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter {
+            let name = TrackText.normalized($0)
+            return !name.isEmpty && seen.insert(name).inserted
+        }
+    }
+}
+
+struct SearchGroup: Identifiable {
+    var title: String
+    var tracks: [Track] = []
+    var names: [String] = []
+    var id: String { title }
+}
+
+private enum TrackText {
+    static func normalized(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "zh_Hans_CN"))
+            .split(whereSeparator: { $0.isWhitespace || $0.isPunctuation || $0.isSymbols })
+            .joined()
     }
 }
 
@@ -211,7 +332,21 @@ struct HomePlaylist: Decodable, Identifiable {
     var url: String?
 }
 
-struct SearchResponse: Decodable { var tracks: [Track] }
+struct SearchResponse: Decodable {
+    var tracks: [Track]
+    init(from decoder: Decoder) throws {
+        if let tracks = try? [Track](from: decoder) { self.tracks = tracks; return }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let items = try container.decodeIfPresent([Track].self, forKey: .tracks) {
+            tracks = items
+        } else if let items = try container.decodeIfPresent([Track].self, forKey: .songs) {
+            tracks = items
+        } else {
+            tracks = []
+        }
+    }
+    private enum CodingKeys: String, CodingKey { case tracks, songs }
+}
 struct ContinueResponse: Decodable { var tracks: [Track]; var station: String? }
 struct ContinueRequest: Encodable {
     var platform: String

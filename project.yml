@@ -7,31 +7,39 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "2"
-    TARGETED_DEVICE_FAMILY: "1"
+    CURRENT_PROJECT_VERSION: "3"
 targets:
   ApuMusic:
     type: application
     platform: iOS
     info:
-      path: Info.plist
+      path: ApuMusic/Info.plist
       properties:
+        CFBundleName: 阿噗音乐
         CFBundleDisplayName: 阿噗音乐
-        UILaunchScreen:
-          UIImageName: ApuMascot
-          UIColorName: LaunchBackground
+        LSRequiresIPhoneOS: true
         UIBackgroundModes:
           - audio
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: ApuMascot
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
     sources:
-      - ApuMusic
+      - path: ApuMusic
+        excludes: [Info.plist, Assets.xcassets]
+      - path: ApuMusic/Assets.xcassets
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fr.kdns.kenmusic.apu
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ApuMusic/Info.plist
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   ApuMusicTests:
     type: bundle.unit-test
     platform: iOS
