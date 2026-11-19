@@ -64,7 +64,8 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :UIRequiresFullScreen' "$APP/Info.plist" | grep -q true
           /usr/libexec/PlistBuddy -c 'Print :UISupportedInterfaceOrientations:0' "$APP/Info.plist" | grep -q Portrait
           xcrun --find assetutil >/dev/null
-          xcrun assetutil --info "$APP/Assets.car" | grep -q AppIcon
+          xcrun assetutil --info "$APP/Assets.car" > asset-catalog-info.json
+          grep -q AppIcon asset-catalog-info.json
           ditto -c -k --sequesterRsrc --keepParent Payload "$IPA"
           test -s "$IPA"
           shasum -a 256 "$IPA" > "$IPA.sha256"
