@@ -9,11 +9,13 @@ final class MusicSmokeTests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments += ["-ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launchEnvironment["UITEST_MODE"] = "1"
+        app.launchEnvironment["APU_API_BASE_URL"] = "http://127.0.0.1:18765/api/v1"
         app.launch()
     }
 
     func testHomeRecommendationsAndSearchResultsAndPlayback() {
         XCTAssertTrue(app.staticTexts["为你精选"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons.matching(identifier: "歌曲-Hello").firstMatch.waitForExistence(timeout: 15))
         screenshot("首页")
 
         app.buttons["搜索音乐"].tap()
@@ -27,14 +29,23 @@ final class MusicSmokeTests: XCTestCase {
 
         firstHello.tap()
         XCTAssertTrue(app.buttons["收起播放器"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["暂停"].waitForExistence(timeout: 8))
+        let playPause = app.buttons["全屏播放控制"]
+        XCTAssertTrue(playPause.waitForExistence(timeout: 8))
+        let playing = expectation(for: NSPredicate(format: "label == %@", "暂停"), evaluatedWith: playPause)
+        let elapsed = app.staticTexts["已播放时间"]
+        let advancing = expectation(for: NSPredicate(format: "exists == true AND label != %@", "0:00"), evaluatedWith: elapsed)
+        wait(for: [playing, advancing], timeout: 15)
         screenshot("全屏播放")
 
         let swipeStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
         let swipeEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.86))
         swipeStart.press(forDuration: 0.05, thenDragTo: swipeEnd)
-        XCTAssertTrue(app.descendants(matching: .any)["迷你播放条"].waitForExistence(timeout: 5))
+        let miniPlayer = app.buttons["打开迷你播放器"]
+        XCTAssertTrue(miniPlayer.waitForExistence(timeout: 5))
         screenshot("迷你播放条")
+        miniPlayer.tap()
+        XCTAssertTrue(app.buttons["收起播放器"].waitForExistence(timeout: 5))
+        XCTAssertEqual(playPause.label, "暂停")
     }
 
     func testLibraryImportedPlaylistDetails() {

@@ -62,6 +62,7 @@ final class Player: ObservableObject {
             let ready = try await poll(task)
             guard ready.errorCode != "unplayable", let audio = ready.audioURL,
                   let url = URL(string: audio, relativeTo: MusicAPI.base)?.absoluteURL else { return }
+            if let tick { engine?.removeTimeObserver(tick) }
             engine = AVPlayer(playerItem: AVPlayerItem(url: url))
             engine?.volume = volume
             engine?.play()
@@ -87,7 +88,6 @@ final class Player: ObservableObject {
     }
 
     private func observeTime() {
-        if let tick { engine?.removeTimeObserver(tick) }
         tick = engine?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
             Task { @MainActor in
                 guard let self else { return }

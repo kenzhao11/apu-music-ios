@@ -2,8 +2,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 import argparse
 import json
-import math
+import re
 import struct
+import sys
 
 
 TRACKS = [
@@ -28,7 +29,7 @@ PLAYLIST_DETAIL = {
 
 def silent_wav():
     sample_rate = 8000
-    frame_count = sample_rate * 4
+    frame_count = sample_rate * 60
     data = bytes(frame_count * 2)
     return b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt " + struct.pack(
         "<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16
@@ -37,7 +38,40 @@ def silent_wav():
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        return
+        print(format % args, file=sys.stderr)
+
+    def send_audio(self, send_body=True):
+        data = silent_wav()
+        start, end = 0, len(data) - 1
+        byte_range = self.headers.get("Range")
+        if byte_range:
+            match = re.fullmatch(r"bytes=(\d+)-(\d*)", byte_range)
+            if match:
+                start = int(match[1])
+                end = min(end, int(match[2])) if match[2] else end
+            if not match or start >= len(data) or end < start:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{len(data)}")
+                self.end_headers()
+                return
+        self.send_response(206 if byte_range else 200)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Accept-Ranges", "bytes")
+        if byte_range:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+        self.send_header("Content-Length", str(end - start + 1))
+        self.end_headers()
+        if send_body:
+            try:
+                self.wfile.write(data[start:end + 1])
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    def do_HEAD(self):
+        route = urlparse(self.path).path
+        if route.startswith("/api/v1/playbacks/") and route.endswith("/audio"):
+            return self.send_audio(send_body=False)
+        self.send_error(404)
 
     def send_json(self, payload, status=200):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -89,12 +123,7 @@ class Handler(BaseHTTPRequestHandler):
                 {"start": 0, "end": 30, "words": [[0, 2, "Hello"]]},
             ]})
         if route.startswith("/api/v1/playbacks/") and route.endswith("/audio"):
-            data = silent_wav()
-            self.send_response(200)
-            self.send_header("Content-Type", "audio/wav")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            return self.wfile.write(data)
+            return self.send_audio()
         if route.startswith("/api/v1/playbacks/") and route.endswith("/lyrics"):
             return self.send_json({"available": True, "plain": "Hello", "words": []})
         if route.startswith("/api/v1/playbacks/"):

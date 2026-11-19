@@ -33,6 +33,7 @@ struct MusicShell: View {
                         }
                         }.foregroundStyle(.white)
                     }.buttonStyle(.plain)
+                        .accessibilityIdentifier("打开迷你播放器")
                     Spacer(minLength: 0)
                     Button { Task { await player.previous() } } label: { Image(systemName: "backward.end.fill") }
                     Button { player.toggle() } label: { Image(systemName: player.isPlaying ? "pause.fill" : "play.fill") }
@@ -426,7 +427,9 @@ struct NowPlayingScreen: View {
                     Slider(value: Binding(get: { player.position }, set: { player.seek(to: $0) }), in: 0...max(player.duration, 1))
                         .tint(Color(red: 0.72, green: 0.92, blue: 0.56))
                     HStack {
-                        Text(time(player.position)); Spacer(); Text("-\(time(max(0, player.duration - player.position)))")
+                        Text(time(player.position)).accessibilityIdentifier("已播放时间")
+                        Spacer()
+                        Text("-\(time(max(0, player.duration - player.position)))")
                     }.font(.system(size: 11, design: .rounded)).foregroundStyle(.secondary).padding(.top, -24)
                     HStack {
                         Button { player.shuffled.toggle() } label: {
@@ -439,6 +442,8 @@ struct NowPlayingScreen: View {
                             Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 25, weight: .bold))
                                 .frame(width: 68, height: 68).background(.white).foregroundStyle(.black).clipShape(Circle())
                         }
+                        .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
+                        .accessibilityIdentifier("全屏播放控制")
                         Spacer()
                         Button { Task { await player.next() } } label: { Image(systemName: "forward.end.fill").font(.system(size: 26)) }
                         Spacer()

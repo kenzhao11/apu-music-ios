@@ -42,6 +42,7 @@ jobs:
             -project ApuMusic.xcodeproj \
             -scheme ApuMusic \
             -destination "platform=iOS Simulator,id=$DEVICE" \
+            -parallel-testing-enabled NO \
             -derivedDataPath build \
             -resultBundlePath ApuMusicTests.xcresult \
             CODE_SIGNING_ALLOWED=NO \
