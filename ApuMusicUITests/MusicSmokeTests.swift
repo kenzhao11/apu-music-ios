@@ -21,10 +21,11 @@ final class MusicSmokeTests: XCTestCase {
         XCTAssertTrue(searchField.waitForExistence(timeout: 5))
         searchField.tap()
         searchField.typeText("hello")
-        XCTAssertTrue(app.buttons["歌曲-Hello"].firstMatch.waitForExistence(timeout: 8))
+        let firstHello = app.buttons.matching(identifier: "歌曲-Hello").element(boundBy: 0)
+        XCTAssertTrue(firstHello.waitForExistence(timeout: 8))
         screenshot("搜索")
 
-        app.buttons["歌曲-Hello"].tap()
+        firstHello.tap()
         XCTAssertTrue(app.buttons["收起播放器"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["暂停"].waitForExistence(timeout: 8))
         screenshot("全屏播放")

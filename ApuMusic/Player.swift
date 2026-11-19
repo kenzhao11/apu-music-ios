@@ -8,7 +8,7 @@ final class Player: ObservableObject {
     @Published private(set) var queue: [Track] = []
     @Published private(set) var currentIndex = 0
     @Published private(set) var isPlaying = false
-    var volume: Float = 1 {
+    var volume: Float = ProcessInfo.processInfo.arguments.contains("-ui-testing") ? 0 : 1 {
         didSet { engine?.volume = volume }
     }
     @Published private(set) var position: Double = 0
