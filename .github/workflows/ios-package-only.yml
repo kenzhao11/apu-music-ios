@@ -42,14 +42,17 @@ jobs:
           test -d "$APP"
           mkdir -p Payload
           cp -R "$APP" Payload/ApuMusic.app
-          /usr/bin/zip -qry ApuMusic-0.1.0-build1-unsigned.ipa Payload
-          shasum -a 256 ApuMusic-0.1.0-build1-unsigned.ipa > ApuMusic-0.1.0-build1-unsigned.ipa.sha256
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
+          BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
+          IPA="ApuMusic-${VERSION}-build${BUILD}-unsigned.ipa"
+          /usr/bin/zip -qry "$IPA" Payload
+          shasum -a 256 "$IPA" > "$IPA.sha256"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ApuMusic-0.1.0-build1-unsigned-package-only
+          name: ApuMusic-0.1.0-build2-unsigned-package-only
           path: |
-            ApuMusic-0.1.0-build1-unsigned.ipa
-            ApuMusic-0.1.0-build1-unsigned.ipa.sha256
+            ApuMusic-0.1.0-build2-unsigned.ipa
+            ApuMusic-0.1.0-build2-unsigned.ipa.sha256
           retention-days: 14

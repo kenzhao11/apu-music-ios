@@ -39,6 +39,55 @@ enum MusicAPI {
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
+
+    static func createPlayback(_ body: PlaybackRequest) async throws -> PlaybackStatusResponse {
+        var request = URLRequest(url: try endpoint("playbacks"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return try await playbackResponse(for: request)
+    }
+
+    static func playbackStatus(id: String, since: String) async throws -> PlaybackStatusResponse {
+        guard let segment = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/%"))),
+              var components = URLComponents(url: try endpoint("playbacks/\(segment)"), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        components.queryItems = [.init(name: "since", value: since), .init(name: "wait_ms", value: "8000")]
+        guard let url = components.url else { throw URLError(.badURL) }
+        return try await playbackResponse(for: URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20))
+    }
+
+    private static func playbackResponse(for request: URLRequest) async throws -> PlaybackStatusResponse {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else {
+            let payload = try? JSONDecoder().decode(PlaybackAPIError.self, from: data)
+            let reason = payload?.detail ?? payload?.error
+            let message = reason.flatMap { $0.isEmpty ? nil : $0 } ?? "服务器返回 HTTP \(http.statusCode)。"
+            throw PlaybackError.unavailable(message)
+        }
+        do {
+            return try JSONDecoder().decode(PlaybackStatusResponse.self, from: data)
+        } catch {
+            throw PlaybackError.unavailable("服务器返回的播放信息无法读取。")
+        }
+    }
+}
+
+private struct PlaybackAPIError: Decodable {
+    var detail: String?
+    var error: String?
+}
+
+enum PlaybackError: LocalizedError {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let message): return message
+        }
+    }
 }
 
 struct Track: Codable, Identifiable, Hashable {
@@ -50,12 +99,14 @@ struct Track: Codable, Identifiable, Hashable {
     var duration: Double?
     var cover: String?
     var sourceId: String?
+    var selectedId: String?
     var playable: Bool?
     var status: String?
 
     enum CodingKeys: String, CodingKey {
         case id, platform, song, singer, album, duration, cover, playable, status
         case sourceId = "source_id"
+        case selectedId = "selected_id"
     }
 
     init(from decoder: Decoder) throws {
@@ -72,6 +123,7 @@ struct Track: Codable, Identifiable, Hashable {
         duration = try values.decodeIfPresent(Double.self, forKey: .duration)
         cover = try values.decodeIfPresent(String.self, forKey: .cover)
         sourceId = try values.decodeIfPresent(String.self, forKey: .sourceId)
+        selectedId = try values.decodeIfPresent(String.self, forKey: .selectedId)
         playable = try values.decodeIfPresent(Bool.self, forKey: .playable)
         status = try values.decodeIfPresent(String.self, forKey: .status)
     }
@@ -86,13 +138,14 @@ struct Track: Codable, Identifiable, Hashable {
         try values.encodeIfPresent(duration, forKey: .duration)
         try values.encodeIfPresent(cover, forKey: .cover)
         try values.encodeIfPresent(sourceId, forKey: .sourceId)
+        try values.encodeIfPresent(selectedId, forKey: .selectedId)
         try values.encodeIfPresent(playable, forKey: .playable)
         try values.encodeIfPresent(status, forKey: .status)
     }
 
     init(id: String, platform: String, song: String, singer: String,
          album: String? = nil, duration: Double? = nil, cover: String? = nil,
-         sourceId: String? = nil, playable: Bool? = nil, status: String? = nil) {
+         sourceId: String? = nil, selectedId: String? = nil, playable: Bool? = nil, status: String? = nil) {
         self.id = id
         self.platform = platform
         self.song = song
@@ -101,12 +154,33 @@ struct Track: Codable, Identifiable, Hashable {
         self.duration = duration
         self.cover = cover
         self.sourceId = sourceId
+        self.selectedId = selectedId
         self.playable = playable
         self.status = status
     }
 
     var canPlay: Bool { playable != false && status != "missing" && !platform.isEmpty }
+    var playbackSelectionID: String { selectedId ?? id.components(separatedBy: "--").dropFirst().first ?? id }
     var artwork: URL? { cover.flatMap(URL.init(string:)) }
+    var thumbnail: URL? {
+        guard let artwork else { return nil }
+        guard var parts = URLComponents(url: artwork, resolvingAgainstBaseURL: false) else { return artwork }
+        var path = parts.path
+        for size in ["1200x1200", "1000x1000", "800x800", "600x600", "500x500", "400x400", "300x300"] {
+            path = path.replacingOccurrences(of: size, with: "240x240")
+        }
+        parts.path = path
+        if ["y.gtimg.cn", "isure.stream.qqmusic.qq.com"].contains(parts.host ?? "") {
+            var query = parts.queryItems ?? []
+            if let size = query.firstIndex(where: { $0.name == "size" }) {
+                query[size].value = "240"
+            } else {
+                query.append(URLQueryItem(name: "size", value: "240"))
+            }
+            parts.queryItems = query
+        }
+        return parts.url
+    }
 
     static func == (lhs: Track, rhs: Track) -> Bool {
         lhs.platform == rhs.platform && lhs.id == rhs.id
@@ -184,33 +258,101 @@ struct PlaybackRequest: Encodable {
     var query: String
     var selectedId: String
     var quality = "high"
-    var streamingMode: String? = nil
-    var includeCover = true
     enum CodingKeys: String, CodingKey {
         case platform, query, quality
         case selectedId = "selected_id"
         case streamingMode = "streaming_mode"
         case includeCover = "include_cover"
     }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(platform, forKey: .platform)
+        try values.encode(query, forKey: .query)
+        try values.encode(selectedId, forKey: .selectedId)
+        try values.encode(quality, forKey: .quality)
+        try values.encodeNil(forKey: .streamingMode)
+        try values.encode(false, forKey: .includeCover)
+    }
 }
 struct PlaybackTask: Decodable {
     var id: String
     var status: String
     var audioURL: String?
+    var streamingURL: String?
+    var streamingMode: String?
+    var alacSourceURL: String?
+    var quality: String?
+    var format: String?
     var errorCode: String?
     var error: String?
     enum CodingKeys: String, CodingKey {
-        case id, status, error
+        case id, status, error, quality, format
         case audioURL = "audio_url"
+        case streamingURL = "streaming_url"
+        case streamingMode = "streaming_mode"
+        case alacSourceURL = "alac_source_url"
         case errorCode = "error_code"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let text = try? container.decode(String.self, forKey: .id) {
+            id = text
+        } else {
+            id = String(try container.decode(Int64.self, forKey: .id))
+        }
+        status = try container.decode(String.self, forKey: .status)
+        audioURL = try container.decodeIfPresent(String.self, forKey: .audioURL)
+        streamingURL = try container.decodeIfPresent(String.self, forKey: .streamingURL)
+        streamingMode = try container.decodeIfPresent(String.self, forKey: .streamingMode)
+        alacSourceURL = try container.decodeIfPresent(String.self, forKey: .alacSourceURL)
+        quality = try container.decodeIfPresent(String.self, forKey: .quality)
+        format = try container.decodeIfPresent(String.self, forKey: .format)
+        errorCode = try container.decodeIfPresent(String.self, forKey: .errorCode)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+    }
+
+    func nativeAudioURL(relativeTo base: URL) -> URL? {
+        let nativeFormats = ["aac", "aacp", "m4a", "mp4", "mp3", "wav", "wave"]
+        let isNativeFormat = nativeFormats.contains(format?.lowercased() ?? "")
+        let isLossless = ["lossless", "hires", "hi-res"].contains(quality?.lowercased() ?? "")
+        guard status == "completed" || (status == "streaming" && streamingMode != "wasm_alac" && isNativeFormat && !isLossless) else {
+            return nil
+        }
+        let original = status == "completed" ? alacSourceURL : nil
+        for path in [audioURL, original].compactMap({ $0 }).filter({ !$0.isEmpty }) {
+            let root = base.appendingPathComponent("")
+            guard let url = URL(string: path, relativeTo: root)?.absoluteURL,
+                  var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+                  components.host != nil, components.user == nil, components.password == nil,
+                  !components.path.hasSuffix("/audio/stream") else { continue }
+            let audioPath = "/playbacks/\(id)/audio"
+            if url.host == base.host && url.port == base.port && url.scheme == base.scheme &&
+                (components.path == base.path + audioPath || components.path == base.path + audioPath + "/source") {
+                var items = components.queryItems ?? []
+                items.removeAll { $0.name == "v" }
+                items.append(URLQueryItem(name: "v", value: id))
+                components.queryItems = items
+            }
+            return components.url
+        }
+        return nil
     }
 }
 struct PlaybackStatusResponse: Decodable {
     var task: PlaybackTask
     init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        task = try container.decode(PlaybackTask.self)
+        if let container = try? decoder.container(keyedBy: CodingKeys.self),
+           let wrapped = try container.decodeIfPresent(PlaybackTask.self, forKey: .task)
+            ?? container.decodeIfPresent(PlaybackTask.self, forKey: .playback) {
+            task = wrapped
+        } else {
+            task = try PlaybackTask(from: decoder)
+        }
     }
+    private enum CodingKeys: String, CodingKey { case task, playback }
 }
 struct Lyrics: Decodable {
     var available: Bool

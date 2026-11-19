@@ -14,12 +14,73 @@ final class MusicModelTests: XCTestCase {
     }
 
     func testPlaybackRequestUsesServerFieldNames() throws {
-        let request = PlaybackRequest(platform: "netease", query: "Song", selectedId: "35847388")
+        let request = PlaybackRequest(platform: "tencent", query: "Hello", selectedId: "2138")
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
 
-        XCTAssertEqual(json["selected_id"] as? String, "35847388")
-        XCTAssertEqual(json["include_cover"] as? Bool, true)
+        XCTAssertEqual(json["selected_id"] as? String, "2138")
+        XCTAssertEqual(json["include_cover"] as? Bool, false)
         XCTAssertEqual(json["quality"] as? String, "high")
+        XCTAssertTrue(json.keys.contains("streaming_mode"))
+        XCTAssertNil(json["streaming_mode"] as? String)
+    }
+
+    func testPlaybackSelectionKeepsThePlatformTrackIDInsteadOfSourceID() throws {
+        let json = Data(#"{"id":2138,"platform":"tencent","song":"Hello","singer":"Adele","source_id":"002Il7Ya1tZ6UZ"}"#.utf8)
+        let track = try JSONDecoder().decode(Track.self, from: json)
+
+        XCTAssertEqual(track.playbackSelectionID, "2138")
+        XCTAssertEqual(track.sourceId, "002Il7Ya1tZ6UZ")
+    }
+
+    func testPlaybackSelectionUsesSelectedIDWhenSearchRowsHavePlaybackMetadataIDs() throws {
+        let json = Data(#"{"id":"tencent--2138--high","platform":"tencent","song":"Hello","singer":"Adele","selected_id":"2138","source_id":"002Il7Ya1tZ6UZ"}"#.utf8)
+        let track = try JSONDecoder().decode(Track.self, from: json)
+
+        XCTAssertEqual(track.playbackSelectionID, "2138")
+        XCTAssertEqual(track.sourceId, "002Il7Ya1tZ6UZ")
+    }
+
+    func testCompletedPlaybackAudioURLsAllowBackendRedirectSources() throws {
+        let json = Data(#"{"id":2138,"status":"completed","audio_url":"/api/v1/playbacks/2138/audio","alac_source_url":"/api/v1/playbacks/2138/audio/source","quality":"high","format":"flac"}"#.utf8)
+        let task = try JSONDecoder().decode(PlaybackTask.self, from: json)
+
+        XCTAssertEqual(task.nativeAudioURL(relativeTo: MusicAPI.base)?.path, "/api/v1/playbacks/2138/audio/source")
+        XCTAssertEqual(task.nativeAudioURL(relativeTo: MusicAPI.base)?.query, "v=2138")
+    }
+
+    func testStreamingLosslessWithoutNativeCodecWaitsForCompletedAudio() throws {
+        let json = Data(#"{"id":"task-1","status":"streaming","audio_url":"/api/v1/playbacks/task-1/audio","quality":"lossless","format":"flac"}"#.utf8)
+        let task = try JSONDecoder().decode(PlaybackTask.self, from: json)
+
+        XCTAssertNil(task.nativeAudioURL(relativeTo: MusicAPI.base))
+    }
+
+    func testPlaybackCreationResponseDecodesWrappedTaskAndALACSources() throws {
+        let json = Data(#"{"playback":{"id":"task-1","status":"streaming","streaming_mode":"wasm_alac","streaming_url":"/api/v1/playbacks/task-1/audio/stream","audio_url":"/api/v1/playbacks/task-1/audio"}}"#.utf8)
+
+        let response = try JSONDecoder().decode(PlaybackStatusResponse.self, from: json)
+
+        XCTAssertEqual(response.task.id, "task-1")
+        XCTAssertEqual(response.task.streamingMode, "wasm_alac")
+        XCTAssertEqual(response.task.streamingURL, "/api/v1/playbacks/task-1/audio/stream")
+    }
+
+    func testPlaybackCreationEnvelopeDecodesTaskReturnedByCurrentAPI() throws {
+        let json = Data(#"{"playback":{"id":"task-3","status":"processing","quality":"high"}}"#.utf8)
+
+        let response = try JSONDecoder().decode(PlaybackStatusResponse.self, from: json)
+
+        XCTAssertEqual(response.task.id, "task-3")
+        XCTAssertEqual(response.task.status, "processing")
+    }
+
+    func testPlaybackStatusResponseAlsoDecodesTaskEnvelope() throws {
+        let json = Data(#"{"task":{"id":"task-2","status":"completed","audio_url":"/api/v1/playbacks/task-2/audio","alac_source_url":"/api/v1/playbacks/task-2/audio/source"}}"#.utf8)
+
+        let response = try JSONDecoder().decode(PlaybackStatusResponse.self, from: json)
+
+        XCTAssertEqual(response.task.audioURL, "/api/v1/playbacks/task-2/audio")
+        XCTAssertEqual(response.task.alacSourceURL, "/api/v1/playbacks/task-2/audio/source")
     }
 
     func testAPIEndpointPreservesQueryAndStaysUnderConfiguredBasePath() throws {
