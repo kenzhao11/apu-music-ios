@@ -84,7 +84,15 @@ jobs:
           curl --silent --fail http://127.0.0.1:18765/health >/dev/null
           xcrun simctl spawn "$DEVICE" defaults write -g AVAudioSessionSilenceOutput -bool YES
           xcrun simctl install "$DEVICE" "$APP"
-          xcrun simctl launch --terminate-running-process "$DEVICE" fr.kdns.kenmusic.apu --uitesting-preview -ui-testing -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN > simulator-launch.log 2>&1 || true
+          LAUNCHED=0
+          for attempt in $(seq 1 8); do
+            if xcrun simctl launch --terminate-running-process "$DEVICE" fr.kdns.kenmusic.apu --uitesting-preview -ui-testing -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN >> simulator-launch.log 2>&1; then
+              LAUNCHED=1
+              break
+            fi
+            sleep 5
+          done
+          test "$LAUNCHED" = 1
           sleep 4
           mkdir -p screenshots
           xcrun simctl io "$DEVICE" screenshot screenshots/build3-home-iphone-15-pro.png
