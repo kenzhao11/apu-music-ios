@@ -41,19 +41,25 @@ struct MusicShell: View {
                 }
                 .font(.system(size: 18)).foregroundStyle(.white).padding(.horizontal, 18).frame(height: 64)
                 .background(Color(uiColor: .secondarySystemBackground))
+                .accessibilityIdentifier("迷你播放条")
                 .buttonStyle(.plain)
             }
             HStack(spacing: 0) {
                 tab("house.fill", "首页", 0)
                 tab("magnifyingglass", "搜索", 1)
-                tab("square.stack.fill", "我的收藏", 2)
+                tab("square.stack.fill", "我的收藏", 2).accessibilityIdentifier("我的收藏")
             }
             .padding(.top, 8)
             .padding(.bottom, 4)
             .background(Color(uiColor: .systemBackground))
         }
         .background(Color(uiColor: .systemBackground))
-        .sheet(isPresented: $playerPresented) { NowPlayingScreen().environmentObject(player) }
+        .sheet(isPresented: $playerPresented) {
+            NowPlayingScreen().environmentObject(player).accessibilityIdentifier("正在播放")
+        }
+        .onAppear {
+            if ProcessInfo.processInfo.arguments.contains("-ui-testing") { player.volume = 0 }
+        }
     }
     private func tab(_ icon: String, _ title: String, _ index: Int) -> some View {
         Button { selectedTab = index } label: {
@@ -74,7 +80,6 @@ struct HomeScreen: View {
     @State private var playlists: [PlaylistSummary] = []
     @State private var error = ""
     @EnvironmentObject private var player: Player
-    private let columns = [GridItem(.flexible()), GridItem(.flexible())]
 
     var body: some View {
         NavigationStack {
@@ -86,12 +91,23 @@ struct HomeScreen: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                     }.padding(.top, 8)
                     sectionTitle("为你精选", trailing: "全部")
-                    LazyVGrid(columns: columns, spacing: 15) {
-                        ForEach(Array(tracks.prefix(8))) { track in
-                            Button { player.setQueue(tracks, start: track); openPlayer() } label: { FeaturedTrack(track: track) }
+                    ScrollView(.horizontal) {
+                        HStack(alignment: .top, spacing: 15) {
+                            ForEach(tracks) { track in
+                                Button { player.setQueue(tracks, start: track); openPlayer() } label: {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Artwork(url: track.artwork, size: 158)
+                                        Text(track.song).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                                        Text(track.singer).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                    .frame(width: 158, alignment: .leading)
+                                    .opacity(track.canPlay ? 1 : 0.48)
+                                }
                                 .buttonStyle(.plain)
+                                .accessibilityIdentifier("歌曲-\(track.song)")
+                            }
                         }
-                    }
+                    }.scrollIndicators(.hidden)
                     if !playlists.isEmpty {
                         sectionTitle("为你挑选的歌单", trailing: "")
                         ScrollView(.horizontal) {
@@ -127,13 +143,16 @@ struct HomeScreen: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink { SearchScreen(openPlayer: openPlayer) } label: { Image(systemName: "magnifyingglass") }
+                        .accessibilityLabel("搜索音乐")
+                        .accessibilityIdentifier("搜索音乐")
                 }
             }
         }
+        .accessibilityIdentifier("首页")
     }
     private func sectionTitle(_ title: String, trailing: String) -> some View {
         HStack {
-            Text(title).font(.system(size: 23, weight: .bold))
+            Text(title).font(.system(size: 23, weight: .bold)).accessibilityIdentifier(title)
             Spacer()
             if !trailing.isEmpty { Button(trailing) {}.font(.system(size: 13)).foregroundStyle(.secondary) }
         }
@@ -181,7 +200,7 @@ struct SearchScreen: View {
                 if !error.isEmpty { Text(error).font(.subheadline).foregroundStyle(.secondary).padding(28) }
             }
             .background(Color(uiColor: .systemBackground))
-            .navigationTitle("搜索")
+            .navigationTitle("搜索").accessibilityIdentifier("搜索页面")
             .searchable(text: $query, prompt: "歌曲、歌手或专辑")
             .task { await loadPlatforms() }
             .task(id: requestKey) {
@@ -259,7 +278,7 @@ struct LibraryScreen: View {
                                     Text("\(playlist.trackCount ?? 0) 首歌曲").font(.caption).foregroundStyle(.secondary)
                                 }
                             }.padding(.vertical, 2)
-                        }
+                        }.accessibilityIdentifier("导入歌单-\(playlist.id)")
                     }
                 }
             }
@@ -278,6 +297,7 @@ struct LibraryScreen: View {
                 }
             }
         }
+        .accessibilityIdentifier("我的收藏页面")
     }
     private func load() async {
         favorites = LibraryStore.favorites
@@ -321,6 +341,7 @@ struct PlaylistScreen: View {
         }
         .background(Color(uiColor: .systemBackground))
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier("歌单详情")
         .task {
             do { detail = try await MusicAPI.get("local/imported-playlists/\(id)") }
             catch { message = "歌单暂时无法加载" }
@@ -432,16 +453,41 @@ struct NowPlayingScreen: View {
                         Button { showingQueue = true } label: { Label("播放队列", systemImage: "list.bullet").foregroundStyle(.white) }
                     }.font(.system(size: 14)).padding(.top, 12)
                     if showingLyrics {
-                        Text(player.lyricText.isEmpty ? "暂无歌词" : player.lyricText)
-                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                            .multilineTextAlignment(.center).frame(maxWidth: .infinity, minHeight: 44)
+                        if player.lyricLines.isEmpty {
+                            Text(player.lyricText.isEmpty ? "暂无歌词" : player.lyricText)
+                                .font(.system(size: 15)).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            ScrollViewReader { proxy in
+                                ScrollView {
+                                    LazyVStack(spacing: 18) {
+                                        ForEach(Array(player.lyricLines.enumerated()), id: \.offset) { index, line in
+                                            Text(line.text.isEmpty ? "♪" : line.text)
+                                                .font(.system(size: index == player.currentLyricIndex ? 19 : 15,
+                                                              weight: index == player.currentLyricIndex ? .semibold : .regular))
+                                                .foregroundStyle(index == player.currentLyricIndex ? .white : .secondary)
+                                                .multilineTextAlignment(.center)
+                                                .frame(maxWidth: .infinity)
+                                                .id(index)
+                                        }
+                                    }.padding(.vertical, 30)
+                                }
+                                .frame(height: 150)
+                                .onChange(of: player.currentLyricIndex) { index in
+                                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(index, anchor: .center) }
+                                }
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 23).padding(.bottom, 22)
             }
             .background(Color(uiColor: .systemBackground))
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "chevron.down").font(.system(size: 15, weight: .semibold)) } }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.down").font(.system(size: 15, weight: .semibold)) }
+                        .accessibilityLabel("收起播放器").accessibilityIdentifier("收起播放器")
+                }
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 3) {
                         Text("正在播放").font(.system(size: 13, weight: .semibold))
@@ -513,7 +559,7 @@ struct TrackRow: View {
             }
             .contentShape(Rectangle())
             .foregroundStyle(track.canPlay ? .white : .secondary)
-        }.buttonStyle(.plain).disabled(!track.canPlay)
+        }.buttonStyle(.plain).disabled(!track.canPlay).accessibilityIdentifier("歌曲-\(track.song)")
     }
     private func addFavorite() {
         var items = LibraryStore.favorites

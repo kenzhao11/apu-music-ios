@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+build/
+*.xcresult/
+screenshots/
+Payload/
+*.ipa
+*.log

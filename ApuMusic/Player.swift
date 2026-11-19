@@ -8,12 +8,17 @@ final class Player: ObservableObject {
     @Published private(set) var queue: [Track] = []
     @Published private(set) var currentIndex = 0
     @Published private(set) var isPlaying = false
+    var volume: Float = 1 {
+        didSet { engine?.volume = volume }
+    }
     @Published private(set) var position: Double = 0
     @Published private(set) var duration: Double = 0
     @Published var repeatMode = 0
     @Published var shuffled = false
     @Published private(set) var lyricText = ""
     @Published private(set) var lyricLines: [LyricLine] = []
+    @Published private(set) var currentLyricIndex = 0
+    private var playbackQueue = PlaybackQueue()
     private var engine: AVPlayer?
     private var tick: Any?
     private var station = ""
@@ -35,9 +40,9 @@ final class Player: ObservableObject {
     }
 
     func setQueue(_ tracks: [Track], start: Track) {
-        queue = tracks.isEmpty ? [start] : tracks.filter(\.canPlay)
-        if !queue.contains(start) { queue.insert(start, at: 0) }
-        currentIndex = queue.firstIndex(of: start) ?? 0
+        playbackQueue = PlaybackQueue(tracks: tracks, startingAt: start)
+        queue = playbackQueue.tracks
+        currentIndex = playbackQueue.index
         Task { await prepareCurrent() }
     }
 
@@ -47,6 +52,7 @@ final class Player: ObservableObject {
         current = track
         lyricText = ""
         lyricLines = []
+        currentLyricIndex = 0
         lockScreenArtwork = nil
         isPlaying = false
         engine?.pause()
@@ -55,8 +61,9 @@ final class Player: ObservableObject {
             let task: PlaybackTask = try await MusicAPI.post("playbacks", body: body)
             let ready = try await poll(task)
             guard ready.errorCode != "unplayable", let audio = ready.audioURL,
-                  let url = URL(string: audio.hasPrefix("http") ? audio : "https://kenmusic.kdns.fr\(audio)") else { return }
+                  let url = URL(string: audio, relativeTo: MusicAPI.base)?.absoluteURL else { return }
             engine = AVPlayer(playerItem: AVPlayerItem(url: url))
+            engine?.volume = volume
             engine?.play()
             isPlaying = true
             observeTime()
@@ -99,16 +106,17 @@ final class Player: ObservableObject {
     func next() async {
         guard !queue.isEmpty else { return }
         if shuffled {
-            currentIndex = Int.random(in: queue.indices)
-        } else if currentIndex + 1 < queue.count {
-            currentIndex += 1
-        } else if repeatMode == 1 {
-            currentIndex = 0
+            _ = playbackQueue.advance(shuffledIndex: Int.random(in: queue.indices))
         } else {
-            await appendContinuation()
-            guard currentIndex + 1 < queue.count else { pause(); return }
-            currentIndex += 1
+            if playbackQueue.advance(repeatsPlaylist: repeatMode == 1) == nil {
+                await appendContinuation()
+                guard let current else { pause(); return }
+                playbackQueue = PlaybackQueue(tracks: queue, startingAt: current)
+                guard playbackQueue.advance() != nil else { pause(); return }
+            }
         }
+        queue = playbackQueue.tracks
+        currentIndex = playbackQueue.index
         await prepareCurrent()
     }
     func previous() async {
@@ -131,7 +139,11 @@ final class Player: ObservableObject {
         let known = Set(queue)
         queue.append(contentsOf: response.tracks.filter { $0.canPlay && !known.contains($0) })
     }
-    func move(from source: IndexSet, to destination: Int) { queue.move(fromOffsets: source, toOffset: destination) }
+    func move(from source: IndexSet, to destination: Int) {
+        playbackQueue.move(from: source, to: destination)
+        queue = playbackQueue.tracks
+        currentIndex = playbackQueue.index
+    }
 
     @objc private func ended() {
         Task {
@@ -151,17 +163,16 @@ final class Player: ObservableObject {
             guard let endpoint = url.url,
                   let (data, _) = try? await URLSession.shared.data(from: endpoint),
                   let lyrics = try? JSONDecoder().decode(Lyrics.self, from: data), lyrics.available else { return }
-            lyricLines = lyrics.words ?? []
+            lyricLines = lyrics.timedLines
             lyricText = lyrics.plain?.isEmpty == false ? lyrics.plain! : (lyrics.translation ?? "")
         }
     }
 
     private func updateLyricLine() {
-        guard let line = lyricLines.first(where: { $0.start <= position && $0.end >= position }) else {
-            lyricText = ""
-            return
-        }
-        lyricText = line.words.map(\.text).joined()
+        guard !lyricLines.isEmpty else { return }
+        guard let index = lyricLines.firstIndex(where: { $0.start <= position && $0.end >= position }) else { return }
+        currentLyricIndex = index
+        lyricText = lyricLines[index].text
     }
 
     private func updateLockScreen() {
