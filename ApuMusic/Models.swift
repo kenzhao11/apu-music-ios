@@ -396,7 +396,7 @@ struct PlaybackRequest: Encodable {
     var platform: String
     var query: String
     var selectedId: String
-    var quality = "high"
+    var quality = "standard"
     enum CodingKeys: String, CodingKey {
         case platform, query, quality
         case selectedId = "selected_id"

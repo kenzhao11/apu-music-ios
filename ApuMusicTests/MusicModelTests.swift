@@ -19,7 +19,7 @@ final class MusicModelTests: XCTestCase {
 
         XCTAssertEqual(json["selected_id"] as? String, "2138")
         XCTAssertEqual(json["include_cover"] as? Bool, false)
-        XCTAssertEqual(json["quality"] as? String, "low")
+        XCTAssertEqual(json["quality"] as? String, "standard")
         XCTAssertTrue(json.keys.contains("streaming_mode"))
         XCTAssertNil(json["streaming_mode"] as? String)
     }

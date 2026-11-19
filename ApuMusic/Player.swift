@@ -182,7 +182,7 @@ final class Player: ObservableObject {
     }
 
     private func prepareTask(for track: Track, candidate: PlaybackCandidate, quality: Quality) async throws -> PreparedAudio {
-        let requestQuality = quality == .standard ? "low" : "high"
+        let requestQuality = quality == .standard ? "standard" : "high"
         let request = PlaybackRequest(platform: candidate.platform, query: track.song,
                                       selectedId: candidate.selectedID, quality: requestQuality)
         let response = try await MusicAPI.createPlayback(request)
