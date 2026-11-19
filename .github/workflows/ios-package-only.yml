@@ -66,13 +66,19 @@ jobs:
           xcrun --find assetutil >/dev/null
           xcrun assetutil --info "$APP/Assets.car" | grep -q AppIcon
           /usr/bin/zip -qry "$IPA" Payload
+          shasum -a 256 "$IPA" > "$IPA.sha256"
+
+      - name: Capture silent iPhone home screenshot
+        continue-on-error: true
+        run: |
+          set -euo pipefail
           xcrun simctl list devices available -j > available-devices.json
           DEVICE_INFO=$(python3 -c 'import json; d=json.load(open("available-devices.json")); xs=[x for v in d["devices"].values() for x in v if x["isAvailable"] and x["name"].startswith("iPhone")]; x=next((x for x in xs if x["name"].startswith("iPhone 15 Pro")), xs[0] if xs else None); print((x["udid"]+" "+x["name"]) if x else "")')
           test -n "$DEVICE_INFO"
           DEVICE=${DEVICE_INFO%% *}
           echo "Screenshot simulator: ${DEVICE_INFO#* }" | tee simulator-device.log
           xcrun simctl boot "$DEVICE" 2>/dev/null || true
-          xcrun simctl bootstatus "$DEVICE" -b
+          timeout 120 xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl status_bar "$DEVICE" override --time '9:41' --batteryState charged --batteryLevel 100
           python3 scripts/uitest_api_stub.py --port 18765 > api-stub.log 2>&1 &
           STUB_PID=$!
@@ -83,22 +89,21 @@ jobs:
           done
           curl --silent --fail http://127.0.0.1:18765/health >/dev/null
           xcrun simctl spawn "$DEVICE" defaults write -g AVAudioSessionSilenceOutput -bool YES
-          xcrun simctl install "$DEVICE" "$APP"
+          timeout 90 xcrun simctl install "$DEVICE" "$APP"
           LAUNCHED=0
           for attempt in $(seq 1 8); do
-            if xcrun simctl launch --terminate-running-process "$DEVICE" fr.kdns.kenmusic.apu --uitesting-preview -ui-testing -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN >> simulator-launch.log 2>&1; then
+            if timeout 30 xcrun simctl launch --terminate-running-process "$DEVICE" fr.kdns.kenmusic.apu --uitesting-preview -ui-testing -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN >> simulator-launch.log 2>&1; then
               LAUNCHED=1
               break
             fi
             sleep 5
           done
-          test "$LAUNCHED" = 1
+          test "$LAUNCHED" = 1 || { cat simulator-launch.log; exit 1; }
           sleep 4
           mkdir -p screenshots
           xcrun simctl io "$DEVICE" screenshot screenshots/build3-home-iphone-15-pro.png
           file "$APP/AppIcon60x60@2x.png" "$APP/Assets.car" screenshots/build3-home-iphone-15-pro.png
           cat simulator-device.log simulator-launch.log
-          shasum -a 256 "$IPA" > "$IPA.sha256"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
@@ -107,8 +112,17 @@ jobs:
           path: |
             ApuMusic-0.1.0-build3-unsigned.ipa
             ApuMusic-0.1.0-build3-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload simulator screenshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ApuMusic-build3-simulator-home-screenshot
+          path: |
             screenshots/build3-home-iphone-15-pro.png
             simulator-device.log
             simulator-launch.log
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
