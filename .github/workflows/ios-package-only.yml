@@ -50,9 +50,9 @@ jobs:
           test -d "$APP"
           mkdir -p Payload
           cp -R "$APP" Payload/ApuMusic.app
-          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
           BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
-          IPA="ApuMusic-${VERSION}-build${BUILD}-unsigned.ipa"
+          test "$BUILD" = "3"
+          IPA="ApuMusic-0.1.0-build3-unsigned.ipa"
           /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily' "$APP/Info.plist"
@@ -65,8 +65,11 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :UISupportedInterfaceOrientations:0' "$APP/Info.plist" | grep -q Portrait
           xcrun --find assetutil >/dev/null
           xcrun assetutil --info "$APP/Assets.car" | grep -q AppIcon
-          /usr/bin/zip -qry "$IPA" Payload
+          ditto -c -k --sequesterRsrc --keepParent Payload "$IPA"
+          test -s "$IPA"
           shasum -a 256 "$IPA" > "$IPA.sha256"
+          test -s "$IPA.sha256"
+          ls -lh "$IPA" "$IPA.sha256"
 
       - name: Capture silent iPhone home screenshot
         continue-on-error: true
