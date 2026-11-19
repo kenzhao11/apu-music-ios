@@ -308,7 +308,11 @@ struct SearchGroup: Identifiable {
 private enum TrackText {
     static func normalized(_ value: String) -> String {
         value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "zh_Hans_CN"))
-            .split(whereSeparator: { $0.isWhitespace || $0.isPunctuation || $0.isSymbols })
+            .split(whereSeparator: {
+                $0.unicodeScalars.allSatisfy {
+                    CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters).union(.symbols).contains($0)
+                }
+            })
             .joined()
     }
 }
