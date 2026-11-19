@@ -17,7 +17,9 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: 阿噗音乐
-        UILaunchStoryboardName: LaunchScreen
+        UILaunchScreen:
+          UIImageName: ApuMascot
+          UIColorName: LaunchBackground
         UIBackgroundModes:
           - audio
         NSAppTransportSecurity:

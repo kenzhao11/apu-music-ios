@@ -44,7 +44,7 @@ final class MusicModelTests: XCTestCase {
         let json = Data(#"{"id":2138,"status":"completed","audio_url":"/api/v1/playbacks/2138/audio","alac_source_url":"/api/v1/playbacks/2138/audio/source","quality":"high","format":"flac"}"#.utf8)
         let task = try JSONDecoder().decode(PlaybackTask.self, from: json)
 
-        XCTAssertEqual(task.nativeAudioURL(relativeTo: MusicAPI.base)?.path, "/api/v1/playbacks/2138/audio/source")
+        XCTAssertEqual(task.nativeAudioURL(relativeTo: MusicAPI.base)?.path, "/api/v1/playbacks/2138/audio")
         XCTAssertEqual(task.nativeAudioURL(relativeTo: MusicAPI.base)?.query, "v=2138")
     }
 
