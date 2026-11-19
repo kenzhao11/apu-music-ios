@@ -84,7 +84,7 @@ struct MusicShell: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
-        .onAppear {
+        .task {
             if ProcessInfo.processInfo.arguments.contains("-ui-testing") { player.volume = 0 }
         }
     }
@@ -176,7 +176,22 @@ struct HomeScreen: View {
                 .padding(.horizontal, 16).padding(.bottom, 20)
             }
             .refreshable { await load() }
-            .task { if tracks.isEmpty { await load() } }
+        .task {
+            guard tracks.isEmpty else { return }
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-preview") {
+                tracks = [
+                    Track(id: "preview-1", platform: "tencent", song: "夜空中最亮的星", singer: "逃跑计划",
+                          album: "世界", duration: 276, cover: ""),
+                    Track(id: "preview-2", platform: "netease", song: "晴天", singer: "周杰伦",
+                          album: "叶惠美", duration: 269, cover: ""),
+                    Track(id: "preview-3", platform: "kugou", song: "若把你", singer: "Kirsty刘瑾睿",
+                          album: "若把你", duration: 208, cover: "")
+                ]
+                isLoading = false
+            } else {
+                await load()
+            }
+        }
             .background(Color.black.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .principal) {

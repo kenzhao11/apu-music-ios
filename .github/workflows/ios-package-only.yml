@@ -84,11 +84,12 @@ jobs:
           curl --silent --fail http://127.0.0.1:18765/health >/dev/null
           xcrun simctl spawn "$DEVICE" defaults write -g AVAudioSessionSilenceOutput -bool YES
           xcrun simctl install "$DEVICE" "$APP"
-          xcrun simctl launch --terminate-running-process "$DEVICE" fr.kdns.kenmusic.apu -ui-testing -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN
+          xcrun simctl launch --terminate-running-process "$DEVICE" fr.kdns.kenmusic.apu --uitesting-preview -ui-testing -AppleLanguages '(zh-Hans)' -AppleLocale zh_CN > simulator-launch.log 2>&1 || true
           sleep 4
           mkdir -p screenshots
           xcrun simctl io "$DEVICE" screenshot screenshots/build3-home-iphone-15-pro.png
           file "$APP/AppIcon60x60@2x.png" "$APP/Assets.car" screenshots/build3-home-iphone-15-pro.png
+          cat simulator-device.log simulator-launch.log
           shasum -a 256 "$IPA" > "$IPA.sha256"
 
       - name: Upload IPA artifact
@@ -100,5 +101,6 @@ jobs:
             ApuMusic-0.1.0-build3-unsigned.ipa.sha256
             screenshots/build3-home-iphone-15-pro.png
             simulator-device.log
+            simulator-launch.log
           if-no-files-found: error
           retention-days: 14

@@ -4,9 +4,8 @@ enum MusicAPI {
     static let base: URL = {
         let environment = ProcessInfo.processInfo.environment
         if environment["UITEST_MODE"] == "1" || ProcessInfo.processInfo.arguments.contains("-ui-testing") {
-            if let local = environment["APU_API_BASE_URL"], let url = URL(string: local),
-               url.host == "127.0.0.1" || url.host == "localhost" {
-                return url
+            if let local = environment["APU_API_BASE_URL"], let url = URL(string: local) {
+                if url.host == "127.0.0.1" || url.host == "localhost" { return url }
             }
             return URL(string: "http://127.0.0.1:18765/api/v1")!
         }
