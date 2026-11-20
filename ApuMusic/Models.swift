@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 enum MusicAPI {
     static let base: URL = {
@@ -22,7 +23,9 @@ enum MusicAPI {
     }
 
     static func get<T: Decodable>(_ path: String) async throws -> T {
-        let (data, response) = try await URLSession.shared.data(from: endpoint(path))
+        var request = URLRequest(url: try endpoint(path), timeoutInterval: 10)
+        request.httpShouldHandleCookies = true
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
@@ -42,11 +45,25 @@ enum MusicAPI {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    static func createPlayback(_ body: PlaybackRequest) async throws -> PlaybackStatusResponse {
-        var request = URLRequest(url: try endpoint("playbacks"))
+    static func send<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
+        var request = URLRequest(url: try endpoint(path), timeoutInterval: 10)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
+        request.httpShouldHandleCookies = true
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    static func createPlayback(_ body: PlaybackRequest) async throws -> PlaybackStatusResponse {
+        var request = URLRequest(url: try endpoint("playbacks"), timeoutInterval: 12)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        request.httpShouldHandleCookies = true
         return try await playbackResponse(for: request)
     }
 
@@ -54,7 +71,7 @@ enum MusicAPI {
         var components = URLComponents(url: try endpoint("search"), resolvingAgainstBaseURL: false)!
         components.queryItems = [.init(name: "q", value: query), .init(name: "limit", value: "50")]
         guard let url = components.url else { throw URLError(.badURL) }
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 12))
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
         if let tracks = try? JSONDecoder().decode([Track].self, from: data) { return tracks }
         return try JSONDecoder().decode(SearchResponse.self, from: data).tracks
@@ -94,11 +111,20 @@ private struct PlaybackAPIError: Decodable {
 
 enum PlaybackError: LocalizedError {
     case unavailable(String)
+    /// Reported by the backend when no source can ever play this song. The
+    /// website marks such a track and steps over it, so the app does the same.
+    case unplayable(String)
 
     var errorDescription: String? {
         switch self {
         case .unavailable(let message): return message
+        case .unplayable(let message): return message
         }
+    }
+
+    var isUnplayable: Bool {
+        if case .unplayable = self { return true }
+        return false
     }
 }
 
@@ -112,7 +138,10 @@ struct Track: Codable, Identifiable, Hashable {
     var cover: String?
     var sourceId: String?
     var selectedId: String?
-    var playbackCandidates: [PlaybackCandidate]?
+    /// Other platform rows the backend matched for this song. Metadata only:
+    /// the website never retries a second platform for one song, so nothing in
+    /// the app may turn these into playback fallbacks.
+    var alternateCandidates: [PlaybackCandidate]?
     var playable: Bool?
     var status: String?
 
@@ -120,6 +149,7 @@ struct Track: Codable, Identifiable, Hashable {
         case id, platform, song, singer, album, duration, cover, playable, status
         case sourceId = "source_id"
         case selectedId = "selected_id"
+        case alternateCandidates = "candidates"
         case playbackCandidates = "playback_candidates"
     }
 
@@ -138,7 +168,8 @@ struct Track: Codable, Identifiable, Hashable {
         cover = try values.decodeIfPresent(String.self, forKey: .cover)
         sourceId = try values.decodeIfPresent(String.self, forKey: .sourceId)
         selectedId = try values.decodeIfPresent(String.self, forKey: .selectedId)
-        playbackCandidates = try values.decodeIfPresent([PlaybackCandidate].self, forKey: .playbackCandidates)
+        alternateCandidates = try values.decodeIfPresent([PlaybackCandidate].self, forKey: .alternateCandidates)
+            ?? values.decodeIfPresent([PlaybackCandidate].self, forKey: .playbackCandidates)
         playable = try values.decodeIfPresent(Bool.self, forKey: .playable)
         status = try values.decodeIfPresent(String.self, forKey: .status)
     }
@@ -154,14 +185,14 @@ struct Track: Codable, Identifiable, Hashable {
         try values.encodeIfPresent(cover, forKey: .cover)
         try values.encodeIfPresent(sourceId, forKey: .sourceId)
         try values.encodeIfPresent(selectedId, forKey: .selectedId)
-        try values.encodeIfPresent(playbackCandidates, forKey: .playbackCandidates)
+        try values.encodeIfPresent(alternateCandidates, forKey: .alternateCandidates)
         try values.encodeIfPresent(playable, forKey: .playable)
         try values.encodeIfPresent(status, forKey: .status)
     }
 
     init(id: String, platform: String, song: String, singer: String,
          album: String? = nil, duration: Double? = nil, cover: String? = nil,
-         sourceId: String? = nil, selectedId: String? = nil, playbackCandidates: [PlaybackCandidate]? = nil,
+         sourceId: String? = nil, selectedId: String? = nil, alternateCandidates: [PlaybackCandidate]? = nil,
          playable: Bool? = nil, status: String? = nil) {
         self.id = id
         self.platform = platform
@@ -172,20 +203,28 @@ struct Track: Codable, Identifiable, Hashable {
         self.cover = cover
         self.sourceId = sourceId
         self.selectedId = selectedId
-        self.playbackCandidates = playbackCandidates
+        self.alternateCandidates = alternateCandidates
         self.playable = playable
         self.status = status
     }
 
+    /// The website queues every row the API returned and only learns that a
+    /// song is unplayable when the backend says so, so the app does not guess
+    /// from missing metadata either.
     var canPlay: Bool {
-        if let playbackCandidates { return !playbackCandidates.isEmpty }
-        return playable != false && status != "missing" && !platform.isEmpty
+        playable != false && status != "missing" && !platform.isEmpty
     }
-    var playbackSelectionID: String { selectedId ?? id.components(separatedBy: "--").dropFirst().first ?? id }
-    var sources: [PlaybackCandidate] {
-        if let playbackCandidates { return playbackCandidates }
-        guard canPlay else { return [] }
-        return [PlaybackCandidate(platform: platform, selectedID: playbackSelectionID, sourceID: sourceId)]
+    /// The row id the API returned for this song. The website posts exactly
+    /// this value as `selected_id` (`trackFromSearch` sets `selected_id:
+    /// item.id`), so both clients ask the backend for the same matched row.
+    var playbackSelectionID: String { selectedId ?? id }
+    /// Rows shown for previews and debugging. Playback must only use
+    /// `playbackSelectionID`; these are never playback fallbacks.
+    var metadataSources: [PlaybackCandidate] {
+        var candidates = alternateCandidates ?? []
+        let primary = PlaybackCandidate(platform: platform, selectedID: playbackSelectionID, sourceID: sourceId)
+        if !platform.isEmpty, !candidates.contains(primary) { candidates.insert(primary, at: 0) }
+        return candidates
     }
     var artwork: URL? { cover.flatMap(URL.init(string:)) }
     var thumbnail: URL? {
@@ -222,10 +261,25 @@ struct PlaybackCandidate: Codable, Hashable {
     var selectedID: String
     var sourceID: String?
 
-    enum CodingKeys: String, CodingKey {
-        case platform
-        case selectedID = "selected_id"
-        case sourceID = "source_id"
+    init(platform: String, selectedID: String, sourceID: String? = nil) {
+        self.platform = platform
+        self.selectedID = selectedID
+        self.sourceID = sourceID
+    }
+
+    enum CodingKeys: String, CodingKey { case platform, id, selectedID = "selected_id", sourceID = "source_id" }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        platform = try values.decode(String.self, forKey: .platform)
+        sourceID = try values.decodeIfPresent(String.self, forKey: .sourceID)
+        if let selected = try values.decodeIfPresent(String.self, forKey: .selectedID) {
+            selectedID = selected
+        } else if let sourceID {
+            selectedID = sourceID
+        } else {
+            selectedID = String(try values.decode(Int64.self, forKey: .id))
+        }
     }
 }
 
@@ -234,14 +288,12 @@ enum TrackDeduplicator {
         var result: [Track] = []
         for track in tracks {
             guard let index = result.firstIndex(where: { sameSong($0, track) }) else {
-                var first = track
-                first.playbackCandidates = track.sources
-                result.append(first)
+                result.append(track)
                 continue
             }
             let existing = result[index]
-            var candidates = existing.sources
-            for candidate in track.sources {
+            var candidates = existing.metadataSources
+            for candidate in track.metadataSources {
                 if let match = candidates.firstIndex(where: {
                     $0.platform == candidate.platform && $0.selectedID == candidate.selectedID
                 }) {
@@ -250,7 +302,7 @@ enum TrackDeduplicator {
                     candidates.append(candidate)
                 }
             }
-            result[index].playbackCandidates = candidates
+            result[index].alternateCandidates = candidates
             if (existing.cover?.isEmpty != false), let cover = track.cover, !cover.isEmpty {
                 result[index].cover = cover
             }
@@ -258,7 +310,7 @@ enum TrackDeduplicator {
                 result[index].album = album
             }
             if existing.duration == nil { result[index].duration = track.duration }
-            result[index].playable = candidates.isEmpty ? false : true
+            result[index].playable = existing.playable != false && track.playable != false
         }
         return result
     }
@@ -391,11 +443,33 @@ struct PlaylistDetail: Decodable {
         }
     }
 }
+/// The quality tiers the website offers (`stores/status.js` + the listening
+/// settings select). The default is `high`, exactly like the website, and the
+/// app sends this value unchanged as the request's `quality`.
+enum PlaybackQuality: String, CaseIterable, Identifiable {
+    case standard, high, lossless, hires
+
+    static let storageKey = "apu.playback.quality"
+    static var preferred: PlaybackQuality {
+        UserDefaults.standard.string(forKey: storageKey).flatMap(PlaybackQuality.init(rawValue:)) ?? .high
+    }
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .standard: return "标准"
+        case .high: return "高品质"
+        case .lossless: return "无损"
+        case .hires: return "Hi-Res"
+        }
+    }
+}
+
 struct PlaybackRequest: Encodable {
     var platform: String
     var query: String
     var selectedId: String
-    var quality = "standard"
+    var quality: String
+    var streamingMode: String? = nil
     enum CodingKeys: String, CodingKey {
         case platform, query, quality
         case selectedId = "selected_id"
@@ -409,23 +483,34 @@ struct PlaybackRequest: Encodable {
         try values.encode(query, forKey: .query)
         try values.encode(selectedId, forKey: .selectedId)
         try values.encode(quality, forKey: .quality)
-        try values.encodeNil(forKey: .streamingMode)
+        try values.encodeIfPresent(streamingMode, forKey: .streamingMode)
         try values.encode(false, forKey: .includeCover)
     }
 }
 struct PlaybackTask: Decodable {
     var id: String
     var status: String
+    var platform: String?
+    var trackId: String?
+    var selectedId: String?
+    var duration: Double?
     var audioURL: String?
     var streamingURL: String?
     var streamingMode: String?
     var alacSourceURL: String?
     var quality: String?
+    var bitrate: Int?
+    var byteSize: Int64?
+    var contentType: String?
     var format: String?
     var errorCode: String?
     var error: String?
     enum CodingKeys: String, CodingKey {
-        case id, status, error, quality, format
+        case id, status, error, quality, format, bitrate, duration, platform
+        case trackId = "track_id"
+        case selectedId = "selected_id"
+        case byteSize = "byte_size"
+        case contentType = "content_type"
         case audioURL = "audio_url"
         case streamingURL = "streaming_url"
         case streamingMode = "streaming_mode"
@@ -441,31 +526,48 @@ struct PlaybackTask: Decodable {
             id = String(try container.decode(Int64.self, forKey: .id))
         }
         status = try container.decode(String.self, forKey: .status)
+        platform = try container.decodeIfPresent(String.self, forKey: .platform)
+        trackId = try container.decodeIfPresent(String.self, forKey: .trackId)
+        selectedId = try container.decodeIfPresent(String.self, forKey: .selectedId)
+        duration = try container.decodeIfPresent(Double.self, forKey: .duration)
         audioURL = try container.decodeIfPresent(String.self, forKey: .audioURL)
         streamingURL = try container.decodeIfPresent(String.self, forKey: .streamingURL)
         streamingMode = try container.decodeIfPresent(String.self, forKey: .streamingMode)
         alacSourceURL = try container.decodeIfPresent(String.self, forKey: .alacSourceURL)
         quality = try container.decodeIfPresent(String.self, forKey: .quality)
+        bitrate = try container.decodeIfPresent(Int.self, forKey: .bitrate)
+        byteSize = try container.decodeIfPresent(Int64.self, forKey: .byteSize)
+        contentType = try container.decodeIfPresent(String.self, forKey: .contentType)
         format = try container.decodeIfPresent(String.self, forKey: .format)
         errorCode = try container.decodeIfPresent(String.self, forKey: .errorCode)
         error = try container.decodeIfPresent(String.self, forKey: .error)
     }
 
+    /// The website's `waitForReady` gate, re-read for a client without the
+    /// WebAssembly ALAC decoder: a finished task is ready, and a growing task
+    /// only once its bytes are already decodable on their own (plain FLAC or
+    /// MP3) and it is not the packet transport the app cannot read.
+    var isReadyForNativePlayback: Bool {
+        if status == "completed" { return true }
+        guard status == "streaming", streamingMode != "wasm_alac" else { return false }
+        let tier = quality?.lowercased() ?? ""
+        let container = format?.lowercased() ?? ""
+        let progressive = container == "flac" || container == "mp3"
+        if ["lossless", "hires", "hi-res"].contains(tier), !progressive { return false }
+        return true
+    }
+
     func nativeAudioURL(relativeTo base: URL) -> URL? {
-        let nativeFormats = ["aac", "aacp", "m4a", "mp4", "mp3", "wav", "wave"]
-        let isNativeFormat = nativeFormats.contains(format?.lowercased() ?? "")
-        let isLossless = ["lossless", "hires", "hi-res"].contains(quality?.lowercased() ?? "")
-        guard status == "completed" || (status == "streaming" && streamingMode != "wasm_alac" && isNativeFormat && !isLossless) else {
-            return nil
-        }
+        guard isReadyForNativePlayback else { return nil }
+        // The website plays a native task from `audio_url`; `alac_source_url`
+        // only replaces it for its own packet transport, which the app avoids.
         let original = status == "completed" ? alacSourceURL : nil
         for path in [audioURL, original].compactMap({ $0 }).filter({ !$0.isEmpty }) {
             let root = base.appendingPathComponent("")
             guard let url = URL(string: path, relativeTo: root)?.absoluteURL,
                   var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                   ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
-                  components.host != nil, components.user == nil, components.password == nil,
-                  !components.path.hasSuffix("/audio/stream") else { continue }
+                  components.host != nil, url.user == nil else { continue }
             let audioPath = "/playbacks/\(id)/audio"
             if url.host == base.host && url.port == base.port && url.scheme == base.scheme &&
                 (components.path == base.path + audioPath || components.path == base.path + audioPath + "/source") {
@@ -585,22 +687,98 @@ enum LibraryStore {
     private static let playlistsKey = "apu.playlists"
     static var favorites: [Track] {
         get { decode(Track.self, key: favoritesKey) }
-        set { encode(newValue, key: favoritesKey) }
+        set { try? saveFavorites(newValue) }
     }
     static var playlists: [LocalPlaylist] {
         get { decode(LocalPlaylist.self, key: playlistsKey) }
-        set { encode(newValue, key: playlistsKey) }
+        set { try? encode(newValue, key: playlistsKey) }
+    }
+    static func saveFavorites(_ tracks: [Track]) throws {
+        try encode(tracks, key: favoritesKey)
     }
     private static func decode<T: Decodable>(_ type: T.Type, key: String) -> [T] {
         guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
         return (try? JSONDecoder().decode([T].self, from: data)) ?? []
     }
-    private static func encode<T: Encodable>(_ items: [T], key: String) {
-        UserDefaults.standard.set(try? JSONEncoder().encode(items), forKey: key)
+    private static func encode<T: Encodable>(_ items: [T], key: String) throws {
+        UserDefaults.standard.set(try JSONEncoder().encode(items), forKey: key)
+    }
+}
+
+@MainActor
+final class FavoriteLibrary: ObservableObject {
+    @Published private(set) var tracks = LibraryStore.favorites
+    @Published var errorMessage: String?
+
+    func contains(_ track: Track) -> Bool { tracks.contains(track) }
+
+    /// The heart fills immediately, exactly like Apple Music. A failed write
+    /// restores the previous list and says so, so the button never lies.
+    func toggle(_ track: Track) {
+        let previous = tracks
+        if let index = tracks.firstIndex(of: track) { tracks.remove(at: index) }
+        else { tracks.insert(track, at: 0) }
+        commit(previous)
+    }
+    func add(_ track: Track) {
+        guard !contains(track) else { return }
+        let previous = tracks
+        tracks.insert(track, at: 0)
+        commit(previous)
+    }
+    func remove(at offsets: IndexSet) {
+        let previous = tracks
+        tracks.remove(atOffsets: offsets)
+        commit(previous)
+    }
+    func refresh() { tracks = LibraryStore.favorites }
+
+    private func commit(_ previous: [Track]) {
+        do { try LibraryStore.saveFavorites(tracks) }
+        catch {
+            tracks = previous
+            errorMessage = "没能保存到「喜欢的歌曲」，请重试。"
+        }
     }
 }
 struct LocalPlaylist: Codable, Identifiable {
     var id: UUID = UUID()
     var name: String
     var tracks: [Track]
+}
+
+struct DownloadedTrack: Codable, Identifiable {
+    var track: Track
+    var filename: String
+    var id: String { track.id }
+}
+
+enum DownloadStore {
+    private static let key = "apu.downloaded.tracks"
+    private static var records: [DownloadedTrack] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
+            return (try? JSONDecoder().decode([DownloadedTrack].self, from: data)) ?? []
+        }
+        set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: key) }
+    }
+    static var tracks: [DownloadedTrack] { records.filter { FileManager.default.fileExists(atPath: fileURL($0).path) } }
+    static func fileURL(_ item: DownloadedTrack) -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(item.filename)
+    }
+    static func localURL(for track: Track) -> URL? {
+        guard let item = tracks.first(where: { $0.track.id == track.id }) else { return nil }
+        return fileURL(item)
+    }
+    static func add(_ track: Track, file: URL) throws {
+        let destination = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("\(UUID().uuidString).\(file.pathExtension)")
+        try FileManager.default.copyItem(at: file, to: destination)
+        records.removeAll { $0.track.id == track.id }
+        records.insert(DownloadedTrack(track: track, filename: destination.lastPathComponent), at: 0)
+    }
+    static func remove(_ item: DownloadedTrack) {
+        try? FileManager.default.removeItem(at: fileURL(item))
+        records.removeAll { $0.id == item.id }
+    }
 }

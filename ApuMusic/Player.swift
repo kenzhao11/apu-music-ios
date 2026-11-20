@@ -43,26 +43,20 @@ final class Player: ObservableObject {
     }
     @Published private(set) var playbackMessage = ""
     @Published private(set) var playbackFailed = false
+    @Published private(set) var actualQualityLabel = "等待音质信息"
+    @Published private(set) var sourceLabel = ""
     @Published var repeatMode = 0
     @Published var shuffled = false
     let progress = PlaybackProgress()
     let lyrics = PlaybackLyrics()
 
-    private struct PreparedAudio {
-        let url: URL
-        let requiresConversion: Bool
+    /// 「酷狗音乐 · FLAC 5130k」: the provider the backend actually served,
+    /// followed by what the audio response really is. The requested tier is
+    /// never printed here.
+    var qualityDisplay: String {
+        sourceLabel.isEmpty ? actualQualityLabel : "\(sourceLabel) · \(actualQualityLabel)"
     }
 
-    enum Quality: String, CaseIterable, Identifiable {
-        case standard, high
-
-        static let storageKey = "apu.playback.quality"
-        static var preferred: Quality {
-            UserDefaults.standard.string(forKey: storageKey).flatMap(Quality.init(rawValue:)) ?? .standard
-        }
-        var id: String { rawValue }
-        var title: String { self == .standard ? "标准（优先开播）" : "高音质" }
-    }
     private static let logger = Logger(subsystem: "fr.kdns.kenmusic.apu", category: "playback")
     private var playbackQueue = PlaybackQueue()
     private var engine: AVPlayer?
@@ -79,10 +73,13 @@ final class Player: ObservableObject {
     private var wantsPlayback = false
     private var startedPlaying = false
     private var localAudio: URL?
-    private var prefetchedAudio: (key: String, audio: PreparedAudio, time: ContinuousClock.Instant)?
-    private var selectedQuality: Quality = .preferred
+    private var prefetched: (key: String, playback: PreparedPlayback, time: ContinuousClock.Instant)?
+    private var selectedQuality: PlaybackQuality = .preferred
     private var selectedAt = ContinuousClock.now
     private var loggedStart = false
+    private var prefetchTrackID: String?
+    private var transportRepaired = false
+    private var consecutiveFailures = 0
     private var station = ""
     private var lockScreenArtwork: MPMediaItemArtwork?
 
@@ -106,23 +103,40 @@ final class Player: ObservableObject {
         prepareCurrent()
     }
 
+    func selectQuality(_ quality: PlaybackQuality) {
+        guard quality != selectedQuality, let current else { return }
+        selectedQuality = quality
+        selection = UUID()
+        selectedAt = .now
+        playbackMessage = "正在切换音质…"
+        playbackFailed = false
+        wantsPlayback = true
+        transportRepaired = false
+        preparation?.cancel()
+        clearEngine()
+        resolveAudio(for: current, selection: selection)
+    }
+
     private func prepareCurrent() {
         guard queue.indices.contains(currentIndex) else { return }
         let track = queue[currentIndex]
         preparation?.cancel()
         prefetchTask?.cancel()
+        prefetchTrackID = nil
         lyricRequest?.cancel()
         artworkRequest?.cancel()
         selection = UUID()
         let selected = selection
         selectedAt = .now
         loggedStart = false
+        transportRepaired = false
         selectedQuality = .preferred
         clearEngine()
         current = track
         playbackMessage = "正在准备音频…"
         playbackFailed = false
         wantsPlayback = true
+        sourceLabel = ""
         lyrics.text = ""
         lyrics.lines = []
         lyrics.currentIndex = 0
@@ -131,92 +145,56 @@ final class Player: ObservableObject {
         updateLockScreen()
         loadLyrics(track, selection: selected)
         artworkRequest = Task { [weak self] in await self?.loadLockScreenArtwork(for: track, selection: selected) }
-        prepareAudio(for: track, selection: selected, candidateIndex: 0)
+        if let local = DownloadStore.localURL(for: track) {
+            sourceLabel = PlatformLabel.name(for: track.platform)
+            actualQualityLabel = "已下载"
+            installPlayer(source: local, repairURL: nil)
+        } else {
+            actualQualityLabel = "正在获取音质…"
+            resolveAudio(for: track, selection: selected)
+        }
+        prefetchNextTrack()
     }
 
-    private func prepareAudio(for track: Track, selection selected: UUID, candidateIndex: Int, fallbackURL: URL? = nil) {
+    /// One request for the matched row, exactly like the website. No second
+    /// platform, no re-search, no other version of the song.
+    private func resolveAudio(for track: Track, selection selected: UUID) {
+        let quality = selectedQuality
+        let key = Self.cacheKey(track: track, quality: quality)
         preparation = Task { [weak self] in
             guard let self else { return }
             do {
-                try Task.checkCancellation()
-                let audio: PreparedAudio
-                if let fallbackURL {
-                    audio = PreparedAudio(url: fallbackURL, requiresConversion: true)
+                let prepared: PreparedPlayback
+                if let cached = prefetched, cached.key == key, cached.time.duration(to: .now) < .seconds(120) {
+                    prefetched = nil
+                    prepared = cached.playback
                 } else {
-                    guard track.sources.indices.contains(candidateIndex) else {
-                        throw PlaybackError.unavailable("这首歌暂时没有可播放的版本。")
-                    }
-                    let candidate = track.sources[candidateIndex]
-                    let cacheKey = Self.sourceKey(candidate: candidate, quality: selectedQuality)
-                    if let cached = prefetchedAudio, cached.key == cacheKey,
-                       cached.time.duration(to: .now) < .seconds(90) {
-                        prefetchedAudio = nil
-                        audio = cached.audio
-                    } else {
-                        audio = try await prepareTask(for: track, candidate: candidate, quality: selectedQuality)
-                    }
+                    prepared = try await PlaybackResolver.prepare(track: track, quality: quality)
                 }
-                guard !Task.isCancelled, selection == selected else { return }
-                let source: URL
-                if audio.requiresConversion {
-                    source = try await CompatibleAudio.localFile(from: audio.url)
-                    guard !Task.isCancelled, self.selection == selected else {
-                        try? FileManager.default.removeItem(at: source)
-                        return
-                    }
-                    localAudio = source
-                } else {
-                    source = audio.url
-                }
-                installPlayer(source: source, candidateIndex: candidateIndex, isLocal: audio.requiresConversion)
+                guard !Task.isCancelled, self.selection == selected else { return }
+                self.install(prepared, track: track, selection: selected)
             } catch {
                 guard !Task.isCancelled, self.selection == selected else { return }
-                Self.logger.error("Audio preparation failed: \(String(reflecting: error as NSError), privacy: .private)")
-                if candidateIndex + 1 < track.sources.count {
-                    prepareAudio(for: track, selection: selected, candidateIndex: candidateIndex + 1)
-                } else {
-                    reportPlaybackFailure(error)
-                }
+                Self.logger.error("Playback preparation failed: \(String(reflecting: error as NSError), privacy: .private)")
+                self.reportPlaybackFailure(error)
             }
         }
     }
 
-    private func prepareTask(for track: Track, candidate: PlaybackCandidate, quality: Quality) async throws -> PreparedAudio {
-        let requestQuality = quality == .standard ? "standard" : "high"
-        let request = PlaybackRequest(platform: candidate.platform, query: track.song,
-                                      selectedId: candidate.selectedID, quality: requestQuality)
-        let response = try await MusicAPI.createPlayback(request)
-        let task = try await audioURL(whenReady: response.task)
-        guard let url = task.nativeAudioURL(relativeTo: MusicAPI.base) else {
-            throw PlaybackError.unavailable("服务器没有返回这首歌的音频地址。")
+    private func install(_ prepared: PreparedPlayback, track: Track, selection selected: UUID) {
+        sourceLabel = prepared.sourceLabel
+        actualQualityLabel = "检测音质…"
+        let duration = prepared.task.duration ?? track.duration ?? 0
+        let audioURL = prepared.audioURL
+        Task { [weak self] in
+            let facts = await AudioProbe.facts(for: audioURL, duration: duration)
+            guard let self, self.selection == selected, self.current?.id == track.id else { return }
+            self.actualQualityLabel = facts?.label ?? "音质未知"
         }
-        let format = task.format?.lowercased() ?? ""
-        let nativeFormats = ["aac", "aacp", "m4a", "mp4", "mp3", "wav", "wave"]
-        return PreparedAudio(url: url, requiresConversion: !nativeFormats.contains(format))
+        installPlayer(source: audioURL, repairURL: audioURL)
     }
 
-    private func audioURL(whenReady initial: PlaybackTask) async throws -> PlaybackTask {
-        var task = initial
-        let deadline = ContinuousClock.now + .seconds(25)
-        while ContinuousClock.now < deadline {
-            try Task.checkCancellation()
-            if task.status == "failed" || task.errorCode == "unplayable" {
-                throw PlaybackError.unavailable(task.error ?? "服务器未能准备这首歌。")
-            }
-            if task.nativeAudioURL(relativeTo: MusicAPI.base) != nil {
-                return task
-            }
-            if task.status == "completed" {
-                throw PlaybackError.unavailable("服务器没有返回可播放的音频地址。")
-            }
-            let next = try await MusicAPI.playbackStatus(id: task.id, since: task.status).task
-            if next.status == task.status { try await Task.sleep(for: .milliseconds(350)) }
-            task = next
-        }
-        throw PlaybackError.unavailable("等待音频准备超时，请稍后重试。")
-    }
-
-    private func installPlayer(source: URL, candidateIndex: Int, isLocal: Bool) {
+    private func installPlayer(source: URL, repairURL: URL?) {
         let item = AVPlayerItem(url: source)
         item.preferredForwardBufferDuration = 3
         let engine = AVPlayer(playerItem: item)
@@ -229,7 +207,7 @@ final class Player: ObservableObject {
             Task { @MainActor in
                 guard let self, self.engine?.currentItem === item else { return }
                 if item.status == .failed {
-                    self.handleItemFailure(item, source: source, candidateIndex: candidateIndex, isLocal: isLocal, error: item.error)
+                    self.handleItemFailure(item, repairURL: repairURL, error: item.error)
                 }
             }
         }
@@ -238,7 +216,10 @@ final class Player: ObservableObject {
                 guard let self, self.engine === engine else { return }
                 let playing = engine.timeControlStatus == .playing
                 if playing {
-                    if !self.startedPlaying { self.prefetchNextTrack() }
+                    if !self.startedPlaying {
+                        self.consecutiveFailures = 0
+                        self.prefetchNextTrack()
+                    }
                     self.startedPlaying = true
                     self.startupTimeout?.cancel()
                     if !self.playbackMessage.isEmpty { self.playbackMessage = "" }
@@ -252,7 +233,7 @@ final class Player: ObservableObject {
             notifications.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main) { [weak self] notification in
                 let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
                 Task { @MainActor in
-                    self?.handleItemFailure(item, source: source, candidateIndex: candidateIndex, isLocal: isLocal, error: error)
+                    self?.handleItemFailure(item, repairURL: repairURL, error: error)
                 }
             },
             notifications.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
@@ -271,27 +252,40 @@ final class Player: ObservableObject {
         startupTimeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(30))
             guard !Task.isCancelled, let self, self.wantsPlayback, !self.startedPlaying else { return }
-            self.handleItemFailure(item, source: source, candidateIndex: candidateIndex, isLocal: isLocal,
+            self.handleItemFailure(item, repairURL: repairURL,
                                    error: PlaybackError.unavailable("读取音频超时。"))
         }
     }
 
-    private func handleItemFailure(_ item: AVPlayerItem, source: URL, candidateIndex: Int, isLocal: Bool, error: Error?) {
+    /// A failing transport is repaired inside the same song: the audio the
+    /// backend chose is downloaded and transcoded once for AVPlayer. The app
+    /// never substitutes a different source or version.
+    private func handleItemFailure(_ item: AVPlayerItem, repairURL: URL?, error: Error?) {
         guard engine?.currentItem === item else { return }
         let failure = item.error ?? error ?? engine?.error ?? URLError(.cannotDecodeContentData)
-        let details = String(reflecting: failure as NSError)
-        Self.logger.error("AVPlayerItem.error: \(details, privacy: .private)")
+        Self.logger.error("AVPlayerItem.error: \(String(reflecting: failure as NSError), privacy: .private)")
         Self.logger.error("AVPlayer error domain=\((failure as NSError).domain, privacy: .public) code=\((failure as NSError).code)")
-        let canRetry = wantsPlayback
         clearEngine()
-        guard canRetry, let track = current else { reportPlaybackFailure(failure); return }
-        playbackMessage = "正在准备音频…"
-        if candidateIndex + 1 < track.sources.count {
-            prepareAudio(for: track, selection: selection, candidateIndex: candidateIndex + 1)
-        } else if !isLocal {
-            prepareAudio(for: track, selection: selection, candidateIndex: candidateIndex, fallbackURL: source)
-        } else {
-            reportPlaybackFailure(failure)
+        guard wantsPlayback else { reportPlaybackFailure(failure); return }
+        guard let repairURL, !transportRepaired else { reportPlaybackFailure(failure); return }
+        transportRepaired = true
+        playbackMessage = "正在转换音频…"
+        let selected = selection
+        preparation = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let local = try await CompatibleAudio.localFile(from: repairURL)
+                guard !Task.isCancelled, self.selection == selected else {
+                    try? FileManager.default.removeItem(at: local)
+                    return
+                }
+                self.localAudio = local
+                self.installPlayer(source: local, repairURL: nil)
+            } catch {
+                guard !Task.isCancelled, self.selection == selected else { return }
+                Self.logger.error("Audio conversion failed: \(String(reflecting: error as NSError), privacy: .private)")
+                self.reportPlaybackFailure(error)
+            }
         }
     }
 
@@ -312,15 +306,26 @@ final class Player: ObservableObject {
     }
 
     private func reportPlaybackFailure(_ error: Error) {
-        wantsPlayback = false
         playbackFailed = true
         if let urlError = error as? URLError, [.notConnectedToInternet, .networkConnectionLost, .timedOut].contains(urlError.code) {
             playbackMessage = "网络连接异常，请检查网络后重试。"
+        } else if let message = error.localizedDescription.nilIfEmpty {
+            playbackMessage = message
         } else {
             playbackMessage = "暂时无法播放这首歌，请重试。"
         }
         Self.logger.error("Playback failed: \(String(reflecting: error as NSError), privacy: .private)")
         updateLockScreen()
+        guard (error as? PlaybackError)?.isUnplayable == true, wantsPlayback else { return }
+        consecutiveFailures += 1
+        guard consecutiveFailures <= 5 else { wantsPlayback = false; return }
+        // The website marks such a song and steps over it; do the same, once.
+        let selected = selection
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, self.selection == selected else { return }
+            await self.next()
+        }
     }
 
     private func observeTime(on engine: AVPlayer) {
@@ -425,7 +430,7 @@ final class Player: ObservableObject {
     }
 
     private func loadLyrics(_ track: Track, selection selected: UUID) {
-        let source = track.sources.first?.sourceID ?? track.playbackSelectionID
+        let source = track.sourceId ?? track.playbackSelectionID
         guard var url = URLComponents(url: MusicAPI.base.appending(path: "lyrics"), resolvingAgainstBaseURL: false) else { return }
         url.queryItems = [.init(name: "platform", value: track.platform), .init(name: "track_id", value: source),
                           .init(name: "title", value: track.song), .init(name: "artist", value: track.singer)]
@@ -445,23 +450,23 @@ final class Player: ObservableObject {
         let nextIndex = currentIndex + 1 < queue.count ? currentIndex + 1 : 0
         guard nextIndex != currentIndex, nextIndex != 0 || repeatMode == 1 else { return }
         let next = queue[nextIndex]
-        guard let candidate = next.sources.first else { return }
-        let quality = Quality.preferred
-        let key = Self.sourceKey(candidate: candidate, quality: quality)
-        if let cached = prefetchedAudio, cached.key == key, cached.time.duration(to: .now) < .seconds(90) { return }
+        guard prefetchTrackID != next.id else { return }
+        let quality = PlaybackQuality.preferred
+        let key = Self.cacheKey(track: next, quality: quality)
+        if let cached = prefetched, cached.key == key, cached.time.duration(to: .now) < .seconds(120) { return }
         prefetchTask?.cancel()
+        prefetchTrackID = next.id
         prefetchTask = Task { [weak self] in
-            guard let self,
-                  let audio = try? await prepareTask(for: next, candidate: candidate, quality: quality),
+            guard let self else { return }
+            guard let prepared = try? await PlaybackResolver.prepare(track: next, quality: quality),
                   !Task.isCancelled else { return }
-            prefetchedAudio = (key, audio, .now)
+            self.prefetched = (key, prepared, .now)
         }
     }
 
-    private static func sourceKey(candidate: PlaybackCandidate, quality: Quality) -> String {
-        "\(candidate.platform)|\(candidate.selectedID)|\(quality.rawValue)"
+    private static func cacheKey(track: Track, quality: PlaybackQuality) -> String {
+        "\(track.platform)|\(track.playbackSelectionID)|\(quality.rawValue)"
     }
-
 
     private func updateLockScreen() {
         guard let current else { return }
@@ -486,4 +491,7 @@ final class Player: ObservableObject {
 }
 private extension Double {
     var finiteNonnegative: Double? { isFinite && self >= 0 ? self : nil }
+}
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

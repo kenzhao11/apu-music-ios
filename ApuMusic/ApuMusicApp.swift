@@ -3,8 +3,10 @@ import SwiftUI
 @main
 struct ApuMusicApp: App {
     @StateObject private var player = Player()
+    @StateObject private var downloads = DownloadManager()
+    @StateObject private var favorites = FavoriteLibrary()
     var body: some Scene {
-        WindowGroup { MusicShell().environmentObject(player).preferredColorScheme(.dark) }
+        WindowGroup { MusicShell().environmentObject(player).environmentObject(downloads).environmentObject(favorites).preferredColorScheme(.dark) }
     }
 }
 
@@ -15,6 +17,8 @@ private enum ApuTheme {
 
 struct MusicShell: View {
     @EnvironmentObject private var player: Player
+    @EnvironmentObject private var downloads: DownloadManager
+    @EnvironmentObject private var favorites: FavoriteLibrary
     @State private var selectedTab = 0
     @State private var playerPresented = false
     private let tabs: [(String, String, Int)] = [
@@ -83,6 +87,22 @@ struct MusicShell: View {
             NowPlayingScreen().environmentObject(player).accessibilityIdentifier("正在播放")
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        }
+        .alert("下载提示", isPresented: Binding(
+            get: { downloads.alertMessage != nil },
+            set: { if !$0 { downloads.alertMessage = nil } }
+        )) {
+            Button("好", role: .cancel) { downloads.alertMessage = nil }
+        } message: {
+            Text(downloads.alertMessage ?? "")
+        }
+        .alert("收藏提示", isPresented: Binding(
+            get: { favorites.errorMessage != nil },
+            set: { if !$0 { favorites.errorMessage = nil } }
+        )) {
+            Button("好", role: .cancel) { favorites.errorMessage = nil }
+        } message: {
+            Text(favorites.errorMessage ?? "")
         }
         .task {
             if ProcessInfo.processInfo.arguments.contains("-ui-testing") { player.volume = 0 }
@@ -338,7 +358,8 @@ struct SearchScreen: View {
 struct LibraryScreen: View {
     var openPlayer: () -> Void
     @EnvironmentObject private var player: Player
-    @State private var favorites = LibraryStore.favorites
+    @EnvironmentObject private var downloads: DownloadManager
+    @EnvironmentObject private var favoriteLibrary: FavoriteLibrary
     @State private var summaries: [PlaylistSummary] = []
     @State private var localPlaylists = LibraryStore.playlists
     @State private var creatingPlaylist = false
@@ -348,13 +369,17 @@ struct LibraryScreen: View {
         NavigationStack {
             List {
                 Section {
-                    NavigationLink { FavoriteScreen(openPlayer: openPlayer) } label: {
+                        NavigationLink { FavoriteScreen(openPlayer: openPlayer) } label: {
                         Label("喜欢的歌曲", systemImage: "heart.fill")
                             .foregroundStyle(.white)
-                            .overlay(alignment: .trailing) { Text("\(favorites.count) 首").font(.caption).foregroundStyle(.secondary) }
+                                .overlay(alignment: .trailing) { Text("\(favoriteLibrary.tracks.count) 首").font(.caption).foregroundStyle(.secondary) }
                     }
                 }
                 Section("你的歌单") {
+                    NavigationLink { DownloadedScreen(openPlayer: openPlayer) } label: {
+                        Label("已下载", systemImage: "arrow.down.circle")
+                            .overlay(alignment: .trailing) { Text("\(DownloadStore.tracks.count) 首").font(.caption).foregroundStyle(.secondary) }
+                    }
                     ForEach(localPlaylists) { playlist in
                         NavigationLink { LocalPlaylistScreen(playlist: playlist, openPlayer: openPlayer) } label: {
                             HStack(spacing: 12) {
@@ -397,7 +422,7 @@ struct LibraryScreen: View {
         .accessibilityIdentifier("我的收藏页面")
     }
     private func load() async {
-        favorites = LibraryStore.favorites
+        favoriteLibrary.refresh()
         localPlaylists = LibraryStore.playlists
         do { let value: PlaylistResponse = try await MusicAPI.get("local/imported-playlists"); summaries = value.playlists }
         catch { }
@@ -474,18 +499,18 @@ struct LocalPlaylistScreen: View {
 struct FavoriteScreen: View {
     var openPlayer: () -> Void
     @EnvironmentObject private var player: Player
-    @State private var tracks: [Track] = []
+    @EnvironmentObject private var favorites: FavoriteLibrary
     var body: some View {
         List {
-            ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+            ForEach(Array(favorites.tracks.enumerated()), id: \.element.id) { index, track in
                 TrackRow(track: track, index: index + 1, active: !track.canPlay) {
                     guard track.canPlay else { return }
-                    player.setQueue(tracks, start: track)
+                    player.setQueue(favorites.tracks, start: track)
                     openPlayer()
                 }
                 .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
             }
-            .onDelete { offsets in tracks.remove(atOffsets: offsets); LibraryStore.favorites = tracks }
+            .onDelete(perform: favorites.remove)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -493,12 +518,14 @@ struct FavoriteScreen: View {
         .navigationTitle("喜欢的歌曲")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
-        .onAppear { tracks = LibraryStore.favorites }
+        .onAppear { favorites.refresh() }
     }
 }
 
 struct NowPlayingScreen: View {
     @EnvironmentObject private var player: Player
+    @EnvironmentObject private var downloads: DownloadManager
+    @EnvironmentObject private var favorites: FavoriteLibrary
     @Environment(\.dismiss) private var dismiss
     @State private var showingLyrics = false
     @State private var showingQueue = false
@@ -516,11 +543,26 @@ struct NowPlayingScreen: View {
                         }
                         Spacer(minLength: 0)
                         Button(action: toggleFavorite) {
-                            Image(systemName: LibraryStore.favorites.contains(player.current ?? emptyTrack) ? "heart.fill" : "heart")
-                                .font(.system(size: 23)).foregroundStyle(LibraryStore.favorites.contains(player.current ?? emptyTrack) ? Color.pink : .white)
+                            Image(systemName: isFavorite ? "heart.fill" : "heart")
+                                .font(.system(size: 23)).foregroundStyle(isFavorite ? Color.pink : .white)
                         }
+                        Button { if let current = player.current { downloads.download(current) } } label: {
+                            if let progress = downloads.progress[player.current?.id ?? ""] {
+                                ProgressView(value: progress).frame(width: 22)
+                            } else {
+                                Image(systemName: "arrow.down.to.line").font(.system(size: 20)).foregroundStyle(.white)
+                            }
+                        }
+                        .accessibilityLabel("下载歌曲")
                     }
                     PlaybackProgressControls(progress: player.progress, seek: player.seek)
+                    HStack {
+                        Text(player.qualityDisplay).foregroundStyle(.secondary)
+                        Spacer()
+                        if let current = player.current, let progress = downloads.progress[current.id] {
+                            ProgressView(value: progress).frame(width: 110)
+                        }
+                    }.font(.system(size: 12))
                     HStack {
                         Button { player.shuffled.toggle() } label: {
                             Image(systemName: "shuffle").foregroundStyle(player.shuffled ? Color(red: 0.72, green: 0.92, blue: 0.56) : .white)
@@ -565,10 +607,13 @@ struct NowPlayingScreen: View {
                     .accessibilityIdentifier("播放状态")
             }
             Picker("音质", selection: Binding(
-                get: { Player.Quality.preferred },
-                set: { UserDefaults.standard.set($0.rawValue, forKey: Player.Quality.storageKey) }
+                get: { PlaybackQuality.preferred },
+                set: {
+                    UserDefaults.standard.set($0.rawValue, forKey: PlaybackQuality.storageKey)
+                    player.selectQuality($0)
+                }
             )) {
-                ForEach(Player.Quality.allCases) { quality in
+                ForEach(PlaybackQuality.allCases) { quality in
                     Text(quality.title).tag(quality)
                 }
             }
@@ -626,12 +671,35 @@ struct NowPlayingScreen: View {
             dismiss()
         })
     }
-    private var emptyTrack: Track { Track(id: "", platform: "", song: "", singer: "") }
+    private var isFavorite: Bool { player.current.map(favorites.contains) ?? false }
     private func toggleFavorite() {
         guard let track = player.current else { return }
-        var items = LibraryStore.favorites
-        if let existing = items.firstIndex(of: track) { items.remove(at: existing) } else { items.insert(track, at: 0) }
-        LibraryStore.favorites = items
+        favorites.toggle(track)
+    }
+}
+
+struct DownloadedScreen: View {
+    var openPlayer: () -> Void
+    @EnvironmentObject private var player: Player
+    @State private var items = DownloadStore.tracks
+    var body: some View {
+        List {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                TrackRow(track: item.track, index: index + 1) {
+                    player.setQueue(items.map(\.track), start: item.track)
+                    openPlayer()
+                }
+                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+            }
+            .onDelete { offsets in
+                for index in offsets { DownloadStore.remove(items[index]) }
+                items = DownloadStore.tracks
+            }
+        }
+        .listStyle(.plain).scrollContentBackground(.hidden).background(Color.black)
+        .navigationTitle("已下载").navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
+        .onAppear { items = DownloadStore.tracks }
     }
 }
 
@@ -699,9 +767,12 @@ struct TrackRow: View {
     var index: Int
     var active = false
     var action: () -> Void
+    @EnvironmentObject private var downloads: DownloadManager
+    @EnvironmentObject private var favorites: FavoriteLibrary
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 11) {
+        HStack(spacing: 8) {
+            Button(action: action) {
+                HStack(spacing: 11) {
                 Artwork(url: track.artwork, size: 42, thumbnailURL: track.thumbnail)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(track.song).font(.system(size: 14, weight: .medium)).lineLimit(1)
@@ -710,31 +781,46 @@ struct TrackRow: View {
                         Text(album).font(.system(size: 11)).foregroundStyle(Color.gray).lineLimit(1)
                     }
                 }
-                Spacer(minLength: 4)
-                if let seconds = track.duration, seconds > 0 {
-                    Text("\(Int(seconds) / 60):\(String(format: "%02d", Int(seconds) % 60))")
-                        .font(.system(size: 11, design: .rounded)).foregroundStyle(.tertiary)
-                }
-                Menu {
-                    Button { addFavorite() } label: { Label("加入喜欢的歌曲", systemImage: "heart") }
-                    ForEach(LibraryStore.playlists) { playlist in
-                        Button(playlist.name) { addToPlaylist(playlist) }
-                    }
-                } label: { Image(systemName: "ellipsis").font(.system(size: 15)).foregroundStyle(.secondary).frame(width: 32, height: 40) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 5)
-            .background(Color.white.opacity(0.001))
-            .frame(height: 64)
-            .foregroundStyle(track.canPlay ? .white : .secondary)
+            .buttonStyle(.plain)
+            .disabled(!track.canPlay)
+            .accessibilityIdentifier("歌曲-\(track.song)")
+            if let seconds = track.duration, seconds > 0 {
+                Text("\(Int(seconds) / 60):\(String(format: "%02d", Int(seconds) % 60))")
+                    .font(.system(size: 11, design: .rounded)).foregroundStyle(.tertiary)
+            }
+            Button { downloads.download(track) } label: {
+                if let progress = downloads.progress[track.id] {
+                    ProgressView(value: progress).frame(width: 21)
+                } else if downloads.errors[track.id] != nil {
+                    Image(systemName: "exclamationmark.circle")
+                        .font(.system(size: 15)).foregroundStyle(Color.orange)
+                } else {
+                    Image(systemName: DownloadStore.localURL(for: track) == nil ? "arrow.down.to.line" : "checkmark.circle.fill")
+                        .font(.system(size: 15)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 30, height: 44)
+            .buttonStyle(.plain)
+            .disabled(!track.canPlay || DownloadStore.localURL(for: track) != nil)
+            .accessibilityLabel("下载\(track.song)")
+            Menu {
+                Button { addFavorite() } label: { Label(favorites.contains(track) ? "从喜欢的歌曲移除" : "加入喜欢的歌曲", systemImage: "heart") }
+                ForEach(LibraryStore.playlists) { playlist in
+                    Button(playlist.name) { addToPlaylist(playlist) }
+                }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 15)).foregroundStyle(.secondary).frame(width: 30, height: 40)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!track.canPlay)
-        .accessibilityIdentifier("歌曲-\(track.song)")
+        .padding(.horizontal, 5)
+        .frame(height: 64)
+        .foregroundStyle(track.canPlay ? .white : .secondary)
     }
     private func addFavorite() {
-        var items = LibraryStore.favorites
-        if !items.contains(track) { items.insert(track, at: 0); LibraryStore.favorites = items }
+        favorites.toggle(track)
     }
     private func addToPlaylist(_ playlist: LocalPlaylist) {
         var items = LibraryStore.playlists

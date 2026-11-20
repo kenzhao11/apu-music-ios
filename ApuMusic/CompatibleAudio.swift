@@ -2,11 +2,11 @@ import AVFoundation
 import Foundation
 
 enum CompatibleAudio {
-    static func localFile(from source: URL) async throws -> URL {
+    static func localFile(from source: URL, onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
         let download = FileManager.default.temporaryDirectory.appendingPathComponent("apu-source-\(UUID().uuidString)")
         let conversion = Task.detached(priority: .utility) {
             defer { try? FileManager.default.removeItem(at: download) }
-            try await downloadAudio(source, to: download)
+            try await downloadAudio(source, to: download, onProgress: onProgress)
             return try transcodeIfNeeded(download)
         }
         return try await withTaskCancellationHandler {
@@ -16,7 +16,7 @@ enum CompatibleAudio {
         }
     }
 
-    private static func downloadAudio(_ source: URL, to destination: URL) async throws {
+    private static func downloadAudio(_ source: URL, to destination: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpMaximumConnectionsPerHost = 2
         let session = URLSession(configuration: configuration)
@@ -48,6 +48,7 @@ enum CompatibleAudio {
             expectedTotal = range.total
             try output.write(contentsOf: chunk)
             offset += Int64(chunk.count)
+            if let expectedTotal { onProgress?(Double(offset) / Double(expectedTotal)) }
         }
         guard let expectedTotal, offset == expectedTotal else {
             throw PlaybackError.unavailable("音频文件传输未完整结束。")
