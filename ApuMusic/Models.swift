@@ -272,6 +272,16 @@ struct PlaybackCandidate: Codable, Hashable {
 
     enum CodingKeys: String, CodingKey { case platform, id, selectedID = "selected_id", sourceID = "source_id" }
 
+    /// `id` is decode-only (older search rows used a numeric database id).
+    /// Writing an explicit encoder keeps `Codable` valid: `CodingKeys.id` has
+    /// no matching stored property, so synthesis cannot produce one.
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(platform, forKey: .platform)
+        try values.encode(selectedID, forKey: .selectedID)
+        try values.encodeIfPresent(sourceID, forKey: .sourceID)
+    }
+
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         platform = try values.decode(String.self, forKey: .platform)
