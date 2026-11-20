@@ -1,0 +1,23 @@
+# request: https://music.zr.wiki/api/v1/playbacks/tencent--0019JtJu1erghh--high/audio?rev=1ff2b022f7cb0a5d96ec9d2f29c13320
+HTTP status: 206
+date: Fri, 20 Nov 2026 06:55:45 GMT
+content-type: audio/mp4
+content-length: 65536
+connection: keep-alive
+server: cloudflare
+content-disposition: inline; filename="________-___.m4a"
+age: 12292
+x-audio-stream-id: b665647bf407250dfd5e5adbe6f7b045
+vary: origin, access-control-request-method, access-control-request-headers
+access-control-allow-origin: *
+access-control-expose-headers: content-type,content-length,content-range,content-encoding,content-disposition,accept-ranges,cache-control,etag,x-audio-stream-id
+cache-control: public, max-age=86400, s-maxage=604800, no-transform
+strict-transport-security: max-age=31536000
+content-range: bytes 0-65535/10394059
+cf-cache-status: HIT
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=OtO4PPq6F%2BjFPGUtC%2BOgct8oxwPpiyvYrZrxd5aNyIxVvzcm0Eu%2BMNIGtjzzU0XouOTfZ8EY7QAipB8an%2FzMsriR6ufXfqYidBIiB3ER49qq0jkvx67ti1cR7hB7GfAY"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-axisnow: cloudflare
+cf-ray: a5d58d055914b83b-MXP
+alt-svc: h3=":443"; ma=86400
+bytes_read: 65536

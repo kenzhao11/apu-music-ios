@@ -1,0 +1,22 @@
+# request: https://music.zr.wiki/api/v1/playbacks/youtubemusic--z2f0vE1-I4k--high/audio?rev=414df8dbbed12cd427090727bcf75747
+HTTP status: 206
+date: Fri, 20 Nov 2026 06:57:20 GMT
+content-type: audio/mp4
+content-length: 65536
+connection: keep-alive
+server: cloudflare
+content-disposition: inline; filename="Radio_(Dum-Dum)_(Radio_(Dum-Dum))_-_YUQI.m4a"
+age: 12158
+vary: origin, access-control-request-method, access-control-request-headers
+access-control-allow-origin: *
+access-control-expose-headers: content-type,content-length,content-range,content-encoding,content-disposition,accept-ranges,cache-control,etag,x-audio-stream-id
+cache-control: public, max-age=86400, s-maxage=604800, no-transform
+strict-transport-security: max-age=31536000
+content-range: bytes 0-65535/2468287
+cf-cache-status: HIT
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=zyYuZrNqkl0yrsFxCnRd%2BNTl5fxphybcep9%2BcuqH9OG3eJ8fwxxrMxmJAdVj2BIn55JipwJjVxfkrBhVPdI%2Bu3bvFBHhCL7NxYR8zYJCh8EghE8EFY3D9Nv0NPIcXhSI"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-axisnow: cloudflare
+cf-ray: a5d58f543c87eda7-MXP
+alt-svc: h3=":443"; ma=86400
+bytes_read: 65536

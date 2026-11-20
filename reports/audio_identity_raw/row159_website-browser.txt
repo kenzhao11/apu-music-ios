@@ -1,0 +1,26 @@
+# request: https://fsandroid.tx.kugou.com/202611201456/e6b4fc0c56e6ae7f592848ae352360c7/v3/749e6c7eaf1a2b16a8c393c56bb7116f/yp/full/ap1005_pi2_s614792436.mp3
+HTTP status: 206
+content-type: audio/mpeg
+content-length: 65536
+connection: keep-alive
+accept-ranges: bytes
+access-control-allow-credentials: true
+access-control-allow-headers: Keep-Alive,User-Agent,If-Modified-Since,If-None-Match,Cache-Control,Content-Type,Authorization,Content-Length,Range,Host
+access-control-allow-methods: GET,POST,PUT,OPTIONS,HEAD,DELETE
+access-control-allow-origin: *
+age: 4752677
+allow: GET,POST,PUT,OPTIONS,HEAD,DELETE
+cache-control: max-age=31536000
+content-range: bytes 0-65535/3827290
+last-modified: Fri, 27 Dec 2024 13:36:37 GMT
+x-bdcdn-cache-status: TCP_HIT
+x-cache-lookup: Cache Hit
+x-nws-log-uuid: 12575424577261496853
+x-request-id: 9ea8c048a43174d93efc3d911ee98bfd
+x-request-ip: 183.4.132.56
+x-response-cache: edge_hit
+x-response-cinfo: 183.4.132.56
+x-tt-trace-tag: id=5
+via: cache05.gxnanning-ct71
+server: openresty
+bytes_read: 65536

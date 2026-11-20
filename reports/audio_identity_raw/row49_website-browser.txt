@@ -1,0 +1,22 @@
+# request: https://music.zr.wiki/api/v1/playbacks/youtubemusic--K0U34CUa5Bs--high/audio?rev=c27187c35c4e5c163a9e32f87179ee6c
+HTTP status: 206
+date: Fri, 20 Nov 2026 06:57:10 GMT
+content-type: audio/mp4
+content-length: 65536
+connection: keep-alive
+server: cloudflare
+content-disposition: inline; filename="___-____.m4a"
+age: 12226
+vary: origin, access-control-request-method, access-control-request-headers
+access-control-allow-origin: *
+access-control-expose-headers: content-type,content-length,content-range,content-encoding,content-disposition,accept-ranges,cache-control,etag,x-audio-stream-id
+cache-control: public, max-age=86400, s-maxage=604800, no-transform
+strict-transport-security: max-age=31536000
+content-range: bytes 0-65535/3982884
+cf-cache-status: HIT
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=FpGzNqLXmAFGqarPcchwfCqrvQjeBI%2BbsEKopOeBjC%2F5YBNkbkeKZct58XnzW8ABh3oydLdXt5azJpCZ7%2F%2BuHjsgtaOdDufIgULAf7BY93laMw%2BxV1pZ2eni%2B3CTf8TR"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-axisnow: cloudflare
+cf-ray: a5d58f1ada215237-MXP
+alt-svc: h3=":443"; ma=86400
+bytes_read: 65536

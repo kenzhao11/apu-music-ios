@@ -1,0 +1,22 @@
+# request: https://music.zr.wiki/api/v1/playbacks/netease--3327692497--high/audio?rev=1a5ecbcbc55825c697bbef76c5178bc0
+HTTP status: 206
+date: Fri, 20 Nov 2026 06:55:54 GMT
+content-type: audio/mpeg
+content-length: 65536
+connection: keep-alive
+server: cloudflare
+content-disposition: inline; filename="_____-____.mp3"
+age: 12258
+vary: origin, access-control-request-method, access-control-request-headers
+access-control-allow-origin: *
+access-control-expose-headers: content-type,content-length,content-range,content-encoding,content-disposition,accept-ranges,cache-control,etag,x-audio-stream-id
+cache-control: public, max-age=86400, s-maxage=604800, no-transform
+strict-transport-security: max-age=31536000
+content-range: bytes 0-65535/10060948
+cf-cache-status: HIT
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=93id21IiyRj%2B2ncgYTI01noqjwqn2kxSpHUILGJrTM0wuQvZh3gt0pMAVOH9Cy5EF28dY7eI9FZ9XbjSypdb4QhbNBWRGELOcj2sYgr5NAe4aHpW44FugOVEkED84vy%2F"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-axisnow: cloudflare
+cf-ray: a5d58d406942ee64-MXP
+alt-svc: h3=":443"; ma=86400
+bytes_read: 65536

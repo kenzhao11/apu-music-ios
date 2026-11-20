@@ -1,0 +1,27 @@
+# request: https://hk.stream.music.joox.com/RS02Z70BDBC239082E.mp3?vkey=6921BF10432CD979CC51F4280459205E51B55DF8281248DC9917C63C6BF40405A7D8A1C0D349335139C4B0CC30D0628C657C3CD077E6B20B&hdnts=exp=1795159589~acl=/*~hmac=b6260c269d1ff3da63d7fb0311c94b68df693423e8099383fccc5dfc6db904df&guid=JOOX@WEB_OPENUDID&uin=0&fromtag=8
+HTTP status: 206
+last-modified: Fri, 20 Dec 2024 20:59:37 GMT
+etag: "e668c31c965b5fd1bc340de9ef0c821e"
+content-type: audio/mpeg
+date: Fri, 20 Nov 2026 03:34:38 GMT
+server: tencent-cos
+x-cos-hash-crc64ecma: 6629912779613198529
+x-cos-meta-md5: e668c31c965b5fd1bc340de9ef0c821e
+x-cos-meta-sha1: a1116f0c9009aabf9dc70e3acc278ee380e685e5
+x-cos-request-id: NmFmZmJmY2VfNl9jNDQ1YmExY18xYTkzN19jNjA4NA==
+x-cos-storage-class: STANDARD_IA
+content-range: bytes 0-65535/504893
+content-length: 65536
+x-nws-log-uuid: 16818553757568390132
+connection: keep-alive
+x-cache-lookup: Cache Hit
+access-control-allow-origin: *
+access-control-max-age: 3600
+timing-allow-origin: *
+access-control-allow-headers: X-SERVER-IP, X-CLIENT-IP
+access-control-expose-headers: X-SERVER-IP, X-CLIENT-IP
+access-control-allow-credentials: true
+access-control-allow-methods: GET,HEAD,POST,OPTIONS
+x-serverip: 43.152.191.14
+client-ip: 80.174.118.88
+bytes_read: 65536
