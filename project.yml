@@ -17,6 +17,11 @@ targets:
       properties:
         CFBundleName: 阿噗音乐
         CFBundleDisplayName: 阿噗音乐
+        # XcodeGen generates the bundled plist from these properties; values in
+        # the template's $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION) alone
+        # shipped as 1.0/1, so write the real build into the generated plist.
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "4"
         LSRequiresIPhoneOS: true
         UIBackgroundModes:
           - audio
