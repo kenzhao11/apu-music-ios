@@ -208,11 +208,14 @@ struct Track: Codable, Identifiable, Hashable {
         self.status = status
     }
 
-    /// The website queues every row the API returned and only learns that a
-    /// song is unplayable when the backend says so, so the app does not guess
-    /// from missing metadata either.
+    /// The website queues every row the API returned and only learns at play
+    /// time whether a source exists; the one thing it never does is play a row
+    /// the backend explicitly marked `playable: false`. So the app asks for any
+    /// row except that one — including rows whose import match is recorded as
+    /// missing, because the backend can still resolve them by row id (two of
+    /// the 21 "missing" rows in the Spotify playlist play on the website).
     var canPlay: Bool {
-        playable != false && status != "missing" && !platform.isEmpty
+        playable != false
     }
     /// The row id the API returned for this song. The website posts exactly
     /// this value as `selected_id` (`trackFromSearch` sets `selected_id:

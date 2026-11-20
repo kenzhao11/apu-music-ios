@@ -79,6 +79,7 @@ APP_SOURCE_CHECKS = {
         "case standard, high, lossless, hires",
         "var isReadyForNativePlayback: Bool",
         "guard let path = audioURL, !path.isEmpty else { return nil }",
+        "var canPlay: Bool {\n        playable != false\n    }",
     ],
     "ApuMusic/Player.swift": [
         "PlaybackResolver.prepare(track: track, quality: quality)",
@@ -299,12 +300,8 @@ def app_request(item):
 
 
 def app_can_play(item):
-    """Track.canPlay from ApuMusic/Models.swift; the app posts nothing otherwise."""
-    if item.get("playable") is False:
-        return False
-    if (item.get("status") or "") == "missing":
-        return False
-    return bool(item.get("platform"))
+    """Track.canPlay from ApuMusic/Models.swift: only `playable: false` is refused."""
+    return item.get("playable") is not False
 
 
 def website_ready(task):
@@ -815,6 +812,10 @@ def main():
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         for row in pool.map(work, pending):
             rows.append(row)
+            if len(rows) % 50 == 0:
+                # A checkpoint every 50 songs: a crash keeps the finished work
+                # usable through --resume instead of losing an hour of requests.
+                write_csv(report_path, sorted(rows, key=lambda item: int(item.get("index") or 0)))
 
     rows.sort(key=lambda row: int(row.get("index") or 0))
     write_csv(report_path, rows)

@@ -3,14 +3,18 @@ import XCTest
 
 final class MusicModelTests: XCTestCase {
     func testSearchAndImportedPlaylistTracksDecodeStringAndNumericIdentifiers() throws {
-        let json = Data(#"[{"id":2138,"platform":"tencent","song":"Hello","singer":"Adele","source_id":"002Il7Ya1tZ6UZ","playable":true},{"id":"1","platform":"kugou","song":"First song","singer":"Artist","status":"matched"},{"id":"335","platform":"","song":"Unavailable","singer":"Artist","status":"missing"}]"#.utf8)
+        let json = Data(#"[{"id":2138,"platform":"tencent","song":"Hello","singer":"Adele","source_id":"002Il7Ya1tZ6UZ","playable":true},{"id":"1","platform":"kugou","song":"First song","singer":"Artist","status":"matched"},{"id":"335","platform":"","song":"Unavailable","singer":"Artist","status":"missing"},{"id":"9","platform":"netease","song":"Nope","singer":"Artist","playable":false}]"#.utf8)
 
         let tracks = try JSONDecoder().decode([Track].self, from: json)
 
-        XCTAssertEqual(tracks.map(\.id), ["2138", "1", "335"])
+        XCTAssertEqual(tracks.map(\.id), ["2138", "1", "335", "9"])
         XCTAssertEqual(tracks[0].sourceId, "002Il7Ya1tZ6UZ")
         XCTAssertTrue(tracks[0].canPlay)
-        XCTAssertFalse(tracks[2].canPlay)
+        // A missing import match is still attempted: the backend can resolve it
+        // by row id, exactly like the website.
+        XCTAssertTrue(tracks[2].canPlay)
+        // Only an explicit backend refusal stops the app from asking.
+        XCTAssertFalse(tracks[3].canPlay)
     }
 
     func testPlaybackRequestUsesServerFieldNames() throws {
