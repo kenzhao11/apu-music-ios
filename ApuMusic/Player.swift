@@ -119,7 +119,20 @@ final class Player: ObservableObject {
 
     private func prepareCurrent() {
         guard queue.indices.contains(currentIndex) else { return }
-        let track = queue[currentIndex]
+        var track = queue[currentIndex]
+        // The queue already drops rows nobody can play; this is the last guard
+        // before a request is posted.
+        if !track.canPlay, playbackQueue.advance() != nil {
+            queue = playbackQueue.tracks
+            currentIndex = playbackQueue.index
+            track = queue[currentIndex]
+        }
+        guard track.canPlay else {
+            wantsPlayback = false
+            playbackFailed = true
+            playbackMessage = "这首歌暂时无法播放。"
+            return
+        }
         preparation?.cancel()
         prefetchTask?.cancel()
         prefetchTrackID = nil
@@ -450,6 +463,7 @@ final class Player: ObservableObject {
         let nextIndex = currentIndex + 1 < queue.count ? currentIndex + 1 : 0
         guard nextIndex != currentIndex, nextIndex != 0 || repeatMode == 1 else { return }
         let next = queue[nextIndex]
+        guard next.canPlay else { return }
         guard prefetchTrackID != next.id else { return }
         let quality = PlaybackQuality.preferred
         let key = Self.cacheKey(track: next, quality: quality)

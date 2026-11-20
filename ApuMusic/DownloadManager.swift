@@ -10,6 +10,12 @@ final class DownloadManager: ObservableObject {
 
     func download(_ track: Track) {
         guard tasks[track.id] == nil else { return }
+        // A row the backend already reported as unplayable is never requested.
+        guard track.canPlay else {
+            errors[track.id] = "这首歌暂时无法播放。"
+            alertMessage = "下载失败：这首歌暂时无法播放。"
+            return
+        }
         errors[track.id] = nil
         progress[track.id] = 0
         tasks[track.id] = Task {

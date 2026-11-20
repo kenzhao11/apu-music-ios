@@ -44,8 +44,12 @@ struct PreparedPlayback {
 
 enum PlaybackResolver {
     /// Creates the task and waits for audio the way the website's
-    /// `resolveTrackSource` + `waitForReady` loop does.
+    /// `resolveTrackSource` + `waitForReady` loop does. A row the backend
+    /// already reported as unplayable is never requested again.
     static func prepare(track: Track, quality: PlaybackQuality) async throws -> PreparedPlayback {
+        guard track.canPlay else {
+            throw PlaybackError.unplayable("这首歌暂时无法播放。")
+        }
         let created = try await MusicAPI.createPlayback(PlaybackTarget(track: track, quality: quality).request).task
         let ready = try await waitUntilReady(created)
         guard let url = ready.nativeAudioURL(relativeTo: MusicAPI.base) else {
@@ -116,14 +120,23 @@ struct AudioFacts: Equatable {
 }
 
 enum AudioProbe {
-    /// Reads four bytes and the response headers. Following the backend's
-    /// redirect gives the CDN answer that carries `Content-Range`.
+    /// Reads at most four bytes and the response headers, so a server that
+    /// ignores `Range` cannot make the app pull a whole song just to label it.
     static func facts(for url: URL, duration: Double) async -> AudioFacts? {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         request.setValue("bytes=0-3", forHTTPHeaderField: "Range")
-        guard let (head, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else { return nil }
-        return facts(head: head, response: http, duration: duration)
+        do {
+            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+            guard let http = response as? HTTPURLResponse else { return nil }
+            var head = Data()
+            for try await byte in bytes {
+                head.append(byte)
+                if head.count >= 4 { break }
+            }
+            return facts(head: head, response: http, duration: duration)
+        } catch {
+            return nil
+        }
     }
 
     static func facts(head: Data, response: HTTPURLResponse, duration: Double) -> AudioFacts? {
@@ -137,24 +150,30 @@ enum AudioProbe {
         } else if mime.contains("mp4") || mime.contains("aac") || mime.contains("m4a") {
             format = "AAC"
         } else if head.count >= 2, head[0] == 0xff, head[1] & 0xe0 == 0xe0 {
-            format = "AAC"
+            // MPEG audio and ADTS both start with 0xFF 0xEx; the layer bits
+            // separate them (ADTS keeps layer 0, MPEG audio does not).
+            format = head[1] & 0x06 == 0 ? "AAC" : "MP3"
         } else if !mime.isEmpty {
             format = mime.replacingOccurrences(of: "audio/", with: "").uppercased()
         } else {
             format = nil
         }
         guard let format else { return nil }
+        // The bitrate is only claimed when the server really answered a ranged
+        // request with the full size, so a missing header means "unknown".
         var bitrate: Int?
-        if let total = totalBytes(response), duration > 0 {
+        if response.statusCode == 206, let total = totalBytes(response), duration > 0 {
             bitrate = Int((Double(total) * 8 / duration / 1000).rounded())
         }
         return AudioFacts(format: format, bitrate: bitrate)
     }
 
+    /// Only a 206 answer carries a trustworthy total size; a `Content-Length`
+    /// on a 200 answer is whatever the server felt like sending.
     static func totalBytes(_ response: HTTPURLResponse) -> Int64? {
+        guard response.statusCode == 206 else { return nil }
         let range = response.value(forHTTPHeaderField: "Content-Range")
-        if let total = range?.split(separator: "/").last.flatMap({ Int64($0) }), total > 0 { return total }
-        if let length = response.value(forHTTPHeaderField: "Content-Length"), let value = Int64(length), value > 0 { return value }
-        return nil
+        guard let total = range?.split(separator: "/").last.flatMap({ Int64($0) }), total > 0 else { return nil }
+        return total
     }
 }

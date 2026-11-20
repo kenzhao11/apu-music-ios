@@ -559,26 +559,24 @@ struct PlaybackTask: Decodable {
 
     func nativeAudioURL(relativeTo base: URL) -> URL? {
         guard isReadyForNativePlayback else { return nil }
-        // The website plays a native task from `audio_url`; `alac_source_url`
-        // only replaces it for its own packet transport, which the app avoids.
-        let original = status == "completed" ? alacSourceURL : nil
-        for path in [audioURL, original].compactMap({ $0 }).filter({ !$0.isEmpty }) {
-            let root = base.appendingPathComponent("")
-            guard let url = URL(string: path, relativeTo: root)?.absoluteURL,
-                  var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-                  ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
-                  components.host != nil, url.user == nil else { continue }
-            let audioPath = "/playbacks/\(id)/audio"
-            if url.host == base.host && url.port == base.port && url.scheme == base.scheme &&
-                (components.path == base.path + audioPath || components.path == base.path + audioPath + "/source") {
-                var items = components.queryItems ?? []
-                items.removeAll { $0.name == "v" }
-                items.append(URLQueryItem(name: "v", value: id))
-                components.queryItems = items
-            }
-            return components.url
+        // The website's native path always plays `audio_url`. `alac_source_url`
+        // only feeds its WebAssembly packet transport, which the app never
+        // requests, so it must never become the app's audio URL.
+        guard let path = audioURL, !path.isEmpty else { return nil }
+        let root = base.appendingPathComponent("")
+        guard let url = URL(string: path, relativeTo: root)?.absoluteURL,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+              components.host != nil, url.user == nil else { return nil }
+        let audioPath = "/playbacks/\(id)/audio"
+        if url.host == base.host && url.port == base.port && url.scheme == base.scheme &&
+            (components.path == base.path + audioPath || components.path == base.path + audioPath + "/source") {
+            var items = components.queryItems ?? []
+            items.removeAll { $0.name == "v" }
+            items.append(URLQueryItem(name: "v", value: id))
+            components.queryItems = items
         }
-        return nil
+        return components.url
     }
 }
 struct PlaybackStatusResponse: Decodable {
