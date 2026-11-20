@@ -556,13 +556,9 @@ struct NowPlayingScreen: View {
                         .accessibilityLabel("下载歌曲")
                     }
                     PlaybackProgressControls(progress: player.progress, seek: player.seek)
-                    HStack {
-                        Text(player.qualityDisplay).foregroundStyle(.secondary)
-                        Spacer()
-                        if let current = player.current, let progress = downloads.progress[current.id] {
-                            ProgressView(value: progress).frame(width: 110)
-                        }
-                    }.font(.system(size: 12))
+                    if let current = player.current, let progress = downloads.progress[current.id] {
+                        ProgressView(value: progress).frame(width: 110)
+                    }
                     HStack {
                         Button { player.shuffled.toggle() } label: {
                             Image(systemName: "shuffle").foregroundStyle(player.shuffled ? Color(red: 0.72, green: 0.92, blue: 0.56) : .white)
@@ -606,20 +602,6 @@ struct NowPlayingScreen: View {
                     .background(Color(uiColor: .secondarySystemBackground))
                     .accessibilityIdentifier("播放状态")
             }
-            Picker("音质", selection: Binding(
-                get: { PlaybackQuality.preferred },
-                set: {
-                    UserDefaults.standard.set($0.rawValue, forKey: PlaybackQuality.storageKey)
-                    player.selectQuality($0)
-                }
-            )) {
-                ForEach(PlaybackQuality.allCases) { quality in
-                    Text(quality.title).tag(quality)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 10)
         }
         .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: $showingQueue) {

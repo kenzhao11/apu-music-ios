@@ -456,25 +456,23 @@ struct PlaylistDetail: Decodable {
         }
     }
 }
-/// The quality tiers the website offers (`stores/status.js` + the listening
-/// settings select). The default is `high`, exactly like the website, and the
-/// app sends this value unchanged as the request's `quality`.
-enum PlaybackQuality: String, CaseIterable, Identifiable {
+/// The quality tiers the website accepts (`components/player/ListeningSettings.vue`).
+/// The website keeps the chosen tier in its own localStorage and never sends
+/// it to the backend, so the app cannot read Ken's value from the API. Until
+/// Ken confirms it, `siteQuality` is the value in `stores/status.js` on a
+/// fresh browser; it is deliberately NOT a local UserDefaults preference and
+/// there is no in-app picker: both clients must use the same outside choice.
+enum PlaybackQuality: String {
     case standard, high, lossless, hires
 
-    static let storageKey = "apu.playback.quality"
-    static var preferred: PlaybackQuality {
-        UserDefaults.standard.string(forKey: storageKey).flatMap(PlaybackQuality.init(rawValue:)) ?? .high
+    /// Verbatim default from `stores/status.js:56` (`quality: "high"`).
+    /// Replace only after Ken confirms the value stored in his browser.
+    static let siteQuality: PlaybackQuality = .high
+
+    var isLossless: Bool {
+        Self.losslessTiers.contains(rawValue)
     }
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .standard: return "标准"
-        case .high: return "高品质"
-        case .lossless: return "无损"
-        case .hires: return "Hi-Res"
-        }
-    }
+    static let losslessTiers: [String] = ["lossless", "hires", "hi-res"]
 }
 
 struct PlaybackRequest: Encodable {
@@ -556,17 +554,16 @@ struct PlaybackTask: Decodable {
         error = try container.decodeIfPresent(String.self, forKey: .error)
     }
 
-    /// The website's `waitForReady` gate, re-read for a client without the
-    /// WebAssembly ALAC decoder: a finished task is ready, and a growing task
-    /// only once its bytes are already decodable on their own (plain FLAC or
-    /// MP3) and it is not the packet transport the app cannot read.
+    /// App.vue:339-348 `waitForReady`, for the app's own player: a completed
+    /// task is ready, and a growing task only when the website considers its
+    /// bytes natively decodable (plain FLAC/MP3, never the wasm packet stream).
     var isReadyForNativePlayback: Bool {
         if status == "completed" { return true }
         guard status == "streaming", streamingMode != "wasm_alac" else { return false }
         let tier = quality?.lowercased() ?? ""
         let container = format?.lowercased() ?? ""
         let progressive = container == "flac" || container == "mp3"
-        if ["lossless", "hires", "hi-res"].contains(tier), !progressive { return false }
+        if PlaybackQuality.losslessTiers.contains(tier), !progressive { return false }
         return true
     }
 

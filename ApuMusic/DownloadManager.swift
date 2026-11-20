@@ -25,9 +25,9 @@ final class DownloadManager: ObservableObject {
                 else { progress[track.id] = nil }
             }
             do {
-                // Same request the player makes, so a download is always the
-                // audio the listener would hear for the chosen tier.
-                let prepared = try await PlaybackResolver.prepare(track: track, quality: .preferred)
+                // Identical request to playback: same site quality tier,
+                // same matched row, same audio URL.
+                let prepared = try await PlaybackResolver.prepare(track: track)
                 progress[track.id] = 0.01
                 let local = try await CompatibleAudio.localFile(from: prepared.audioURL) { [weak self] value in
                     Task { @MainActor in self?.progress[track.id] = 0.01 + value * 0.98 }

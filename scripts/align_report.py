@@ -69,10 +69,10 @@ APP_SOURCE_CHECKS = {
         "self.platform = track.platform",
         "self.query = track.song",
         "self.selectedId = track.playbackSelectionID",
-        "self.streamingMode = nil",
+        "self.streamingMode = platform == \"applemusic\" && quality.isLossless ? \"wasm_alac\" : nil",
         "quality.rawValue",
         "guard track.canPlay else",
-        "static func prepare(track: Track, quality: PlaybackQuality) async throws -> PreparedPlayback",
+        "static func prepare(track: Track, quality: PlaybackQuality = .siteQuality) async throws -> PreparedPlayback",
     ],
     "ApuMusic/Models.swift": [
         "var playbackSelectionID: String { selectedId ?? id }",
@@ -82,12 +82,12 @@ APP_SOURCE_CHECKS = {
         "var canPlay: Bool {\n        playable != false\n    }",
     ],
     "ApuMusic/Player.swift": [
-        "PlaybackResolver.prepare(track: track, quality: quality)",
-        "qualityDisplay",
+        "PlaybackResolver.prepare(track: track)",
+        "installPlayer(source: prepared.audioURL)",
         "guard track.canPlay else",
     ],
     "ApuMusic/DownloadManager.swift": [
-        "PlaybackResolver.prepare(track: track, quality: .preferred)",
+        "PlaybackResolver.prepare(track: track)",
         "guard track.canPlay else",
     ],
 }
@@ -289,13 +289,15 @@ def website_request(item):
 def app_request(item):
     """PlaybackTarget(track:quality:) from ApuMusic/PlaybackResolver.swift."""
     selected = item.get("selected_id") if item.get("selected_id") is not None else str(item["id"])
+    platform = item.get("platform") or ""
+    # PlaybackTarget: wasm_alac only for Apple Music lossless tiers.
+    streaming = "wasm_alac" if platform == "applemusic" and APP_QUALITY_DEFAULT in APP_LOSSLESS_TIERS else None
     return {
-        "platform": item.get("platform") or "",
+        "platform": platform,
         "query": item.get("song") or "",
         "selected_id": selected,
         "quality": APP_QUALITY_DEFAULT,
-        # The app never asks for the WebAssembly packet transport it cannot read.
-        "streaming_mode": None,
+        "streaming_mode": streaming,
         "include_cover": False,
     }
 

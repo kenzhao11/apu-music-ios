@@ -98,7 +98,7 @@ enum CompatibleAudio {
                     (header.count >= 2 && header[0] == 0xff && header[1] & 0xe0 == 0xe0) {
             fileExtension = header.count >= 2 && header[0] == 0xff && header[1] & 0xf6 == 0xf0 ? "aac" : "mp3"
         } else {
-            throw PlaybackError.unavailable("音源未返回 iPhone 可读取的音频格式。")
+            throw PlaybackError.unavailable("音频格式不受支持。")
         }
         let output = temporary.appendingPathExtension(fileExtension)
         try FileManager.default.moveItem(at: download, to: output)
