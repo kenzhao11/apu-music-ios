@@ -36,6 +36,11 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fr.kdns.kenmusic.apu
+        # Keep the bundle version alongside the target: target-level base
+        # settings replace the project-level ones, so $(...)-values in
+        # Info.plist would otherwise expand to Xcode's 1.0 / 1 default.
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "4"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
