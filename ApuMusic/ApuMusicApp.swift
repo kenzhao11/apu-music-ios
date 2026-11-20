@@ -523,6 +523,30 @@ struct FavoriteScreen: View {
     }
 }
 
+private struct PageSwipeState {
+    var excluded: Bool?
+    var dragging = false
+}
+
+private struct PlayerExclusionFramesKey: PreferenceKey {
+    static var defaultValue: [CGRect] = []
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+private extension View {
+    /// Registers a region that must not start a page-wide song swipe.
+    func playerExclusionZone() -> some View {
+        background(GeometryReader { proxy in
+            Color.clear
+                .preference(key: PlayerExclusionFramesKey.self,
+                            value: [proxy.frame(in: .named("player"))])
+                .allowsHitTesting(false)
+        })
+    }
+}
+
 struct NowPlayingScreen: View {
     @EnvironmentObject private var player: Player
     @EnvironmentObject private var downloads: DownloadManager
@@ -533,6 +557,8 @@ struct NowPlayingScreen: View {
     @State private var coverOffset: CGFloat = 0
     @State private var coverOpacity: Double = 1
     @State private var coverSwitching = false
+    @State private var exclusionFrames: [CGRect] = []
+    @GestureState private var pageSwipeState = PageSwipeState()
 
     private var coverSize: CGFloat { min(UIScreen.main.bounds.width - 46, 376) }
 
@@ -550,7 +576,6 @@ struct NowPlayingScreen: View {
                     .frame(width: coverSize, height: coverSize)
                     .clipShape(RoundedRectangle(cornerRadius: 7))
                     .contentShape(Rectangle())
-                    .highPriorityGesture(coverSwipe)
                     .accessibilityLabel("歌曲封面")
                     .accessibilityHint("上滑下一首，下滑上一首")
                     .padding(.top, 4)
@@ -574,6 +599,7 @@ struct NowPlayingScreen: View {
                         .accessibilityLabel("下载歌曲")
                     }
                     PlaybackProgressControls(progress: player.progress, seek: player.seek)
+                        .playerExclusionZone()
                     if let current = player.current, let progress = downloads.progress[current.id] {
                         ProgressView(value: progress).frame(width: 110)
                     }
@@ -605,10 +631,12 @@ struct NowPlayingScreen: View {
                     }.font(.system(size: 14)).padding(.top, 12)
                     if showingLyrics {
                         PlayingLyrics(lyrics: player.lyrics)
+                            .playerExclusionZone()
                     }
                 }
                 .padding(.horizontal, 23).padding(.bottom, 22)
             }
+            .scrollDisabled(pageSwipeState.dragging)
             if !player.playbackMessage.isEmpty {
                 Text(player.playbackMessage)
                     .font(.system(size: 13, weight: .medium))
@@ -622,6 +650,9 @@ struct NowPlayingScreen: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
+        .coordinateSpace(name: "player")
+        .onPreferenceChange(PlayerExclusionFramesKey.self) { exclusionFrames = $0 }
+        .simultaneousGesture(pageSwipe)
         .sheet(isPresented: $showingQueue) {
             NavigationStack {
                 List {
@@ -646,17 +677,28 @@ struct NowPlayingScreen: View {
         }
     }
 
-    private var coverSwipe: some Gesture {
-        DragGesture(minimumDistance: 10)
+    private var pageSwipe: some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .named("player"))
+            .updating($pageSwipeState) { value, state, _ in
+                if state.excluded == nil {
+                    state.excluded = gestureStartsInExcludedZone(value.startLocation)
+                }
+                guard !coverSwitching,
+                      state.excluded == false,
+                      abs(value.translation.height) > abs(value.translation.width) else { return }
+                state.dragging = true
+            }
             .onChanged { value in
-                guard !coverSwitching else { return }
+                guard !coverSwitching,
+                      !pageSwipeBlocked(at: value.startLocation) else { return }
                 let vertical = value.translation.height
                 guard abs(vertical) > abs(value.translation.width) else { return }
                 coverOffset = vertical
                 coverOpacity = 1 - min(abs(vertical) / (coverSize * 3), 0.22)
             }
             .onEnded { value in
-                guard !coverSwitching else { return }
+                guard !coverSwitching,
+                      !pageSwipeBlocked(at: value.startLocation) else { return }
                 let vertical = value.translation.height
                 let horizontal = value.translation.width
                 let predicted = value.predictedEndTranslation.height
@@ -671,6 +713,19 @@ struct NowPlayingScreen: View {
                 }
                 if vertical < 0 { nextFromCover() } else { previousFromCover() }
             }
+    }
+
+    private func pageSwipeBlocked(at start: CGPoint) -> Bool {
+        pageSwipeState.excluded ?? gestureStartsInExcludedZone(start)
+    }
+
+    private func gestureStartsInExcludedZone(_ point: CGPoint) -> Bool {
+        // The sheet header/dismiss strip is the first 80pt of this page.
+        if point.y < 80 { return true }
+        // The progress slider is the only horizontal control on this screen;
+        // there is no volume slider or horizontal carousel. Any future control
+        // that must own horizontal drags uses `playerExclusionZone()`.
+        return exclusionFrames.contains { $0.contains(point) }
     }
 
     private func nextFromCover() {
