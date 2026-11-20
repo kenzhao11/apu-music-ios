@@ -1,0 +1,47 @@
+{
+  "generated_at": "2026-11-20T13:52:45",
+  "playlist": "Spotify 喜欢的歌曲",
+  "playlist_id": "spotify-liked",
+  "website_quality": "high",
+  "app_quality": "high",
+  "concurrency": 2,
+  "min_request_interval_ms": 300,
+  "requests_sent": 1,
+  "rate_limit_pauses": 0,
+  "elapsed_seconds": 0.0,
+  "report": "D:/Projects/apu-music-ios/reports/missing-pass\\align_report.csv",
+  "unplayable_report": "D:/Projects/apu-music-ios/reports/missing-pass\\align_unplayable.csv",
+  "source_digests": {
+    "app:ApuMusic/PlaybackResolver.swift": "742e6a4dfb576750",
+    "app:ApuMusic/Models.swift": "20a27a082df229c8",
+    "app:ApuMusic/Player.swift": "4daab7e6a62dcbd3",
+    "app:ApuMusic/DownloadManager.swift": "fc0fe5d8077aba3f",
+    "website:App.vue": "360ee24c80ab41a2",
+    "website:utils/track.js": "1346ea85857fc264",
+    "website:stores/status.js": "2e33e526adc32556",
+    "website:apis/music.js": "0c16f252db9bfbbf",
+    "website:apis/media-routing.js": "87bc84a81143f30a",
+    "website:stores/playlists.js": "f3c4b45ebd9b8b0e"
+  },
+  "script": {
+    "path": "scripts/align_report.py",
+    "sha256": "1dbb23de099176f6b6d211487b67f925388a3729138d7cecd20c2fbee44830ff",
+    "git_commit": "afef4532bf2a6a532e07a5e8c2d94c0cdd06b4c4",
+    "git_branch": "fix/build4-playback-align",
+    "uncommitted_paths": "M scripts/align_report.py"
+  },
+  "notes": [
+    "音源/歌曲ID 取自 POST /api/v1/playbacks 返回的 platform、track_id。",
+    "实际音质取自 /playbacks/{id}/audio 重定向后真实响应的容器与 Content-Range 总字节数，按歌曲时长换算平均码率；缺任一条件记未验证，不用请求档位代替。",
+    "播放URL 只比较 scheme/host/路径模板/后缀，签名与动态 id 不比较。",
+    "网站侧按本地前端源码 App.vue/music.js/track.js/status.js/media-routing.js 推导；App 侧按 ApuMusic/PlaybackResolver.swift 与 Models.swift 推导，两侧代码互相独立。本地前端源码不等于线上部署版本，线上行为只由本次接口请求证据说明。",
+    "Apple Music 无损：网站请求 streaming_mode=wasm_alac（需要其 WebAssembly 解码器），App 固定 null（用同一任务的兼容音频）。默认档位 high 下两者都为 null；出现差异的行在 transport_note 与 request_match 中单独标出，不视为等价。",
+    "一首歌只请求其已匹配的那一行，不跨平台换源（与网站核心播放器一致）。",
+    "导入未匹配的行（platform 空 / status=missing）记“不可播（缺匹配源）”，不构造空参数请求；与“有匹配源但后端失败”的不可播分开计数。",
+    "长时间扫描时后端偶尔会把个别行瞬时判为 failed/unplayable，同一请求稍后再发就正常；这类行用独立的小规模二次确认补齐，round_log 保留首轮与确认结果，不隐去差异。"
+  ],
+  "songs": 21,
+  "counts": {
+    "不可播（缺匹配源）": 21
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-11-20T13:43:04",
+  "playlist": "Spotify 喜欢的歌曲",
+  "playlist_id": "spotify-liked",
+  "songs": 1022,
+  "counts": {
+    "一致": 993,
+    "不可播（缺匹配源）": 21,
+    "不可播": 8
+  },
+  "website_quality": "high",
+  "app_quality": "high",
+  "concurrency": 2,
+  "min_request_interval_ms": 300,
+  "requests_sent": 3048,
+  "rate_limit_pauses": 0,
+  "elapsed_seconds": 3200.1,
+  "report": "D:/Projects/apu-music-ios/reports\\align_report.csv",
+  "unplayable_report": "D:/Projects/apu-music-ios/reports\\align_unplayable.csv",
+  "source_digests": {
+    "app:ApuMusic/PlaybackResolver.swift": "742e6a4dfb576750",
+    "app:ApuMusic/Models.swift": "20a27a082df229c8",
+    "app:ApuMusic/Player.swift": "4daab7e6a62dcbd3",
+    "app:ApuMusic/DownloadManager.swift": "fc0fe5d8077aba3f",
+    "website:App.vue": "360ee24c80ab41a2",
+    "website:utils/track.js": "1346ea85857fc264",
+    "website:stores/status.js": "2e33e526adc32556",
+    "website:apis/music.js": "0c16f252db9bfbbf",
+    "website:apis/media-routing.js": "87bc84a81143f30a",
+    "website:stores/playlists.js": "f3c4b45ebd9b8b0e"
+  },
+  "notes": [
+    "音源/歌曲ID 取自 POST /api/v1/playbacks 返回的 platform、track_id。",
+    "实际音质取自 /playbacks/{id}/audio 重定向后真实响应的容器与 Content-Range 总字节数，按歌曲时长换算平均码率；缺任一条件记未验证，不用请求档位代替。",
+    "播放URL 只比较 scheme/host/路径模板/后缀，签名与动态 id 不比较。",
+    "网站侧按 App.vue/music.js/track.js/status.js/media-routing.js 推导；App 侧按 ApuMusic/PlaybackResolver.swift 与 Models.swift 推导，两侧代码互相独立。",
+    "Apple Music 无损：网站请求 streaming_mode=wasm_alac（需要其 WebAssembly 解码器），App 固定 null（用同一任务的兼容音频）。默认档位 high 下两者都为 null；出现差异的行在 transport_note 与 request_match 中单独标出，不视为等价。",
+    "一首歌只请求其已匹配的那一行，不跨平台换源（与网站核心播放器一致）。"
+  ],
+  "confirmation_pass": {
+    "file": "D:/Projects/apu-music-ios/reports/missing-pass/align_report.csv",
+    "replaced_rows": 21,
+    "merged_at": "2026-11-20T13:56:22"
+  }
+}

@@ -130,12 +130,13 @@ CSV_FIELDS = [
     "app_actual_format", "app_actual_bitrate_kbps", "app_actual_bytes", "probe_shared",
     "web_header_source", "web_header_fallback",
     "source_match", "song_id_match", "quality_match", "domain_match", "format_match", "url_structure_match",
-    "result", "difference", "transport_note", "verified_at",
+    "result", "difference", "transport_note", "round_log", "verified_at",
 ]
 
 RESULT_SAME = "一致"
 RESULT_DIFF = "不一致"
 RESULT_UNPLAYABLE = "不可播"
+RESULT_MISSING = "不可播（缺匹配源）"
 RESULT_UNVERIFIED = "未验证"
 
 
@@ -302,6 +303,13 @@ def app_request(item):
 def app_can_play(item):
     """Track.canPlay from ApuMusic/Models.swift: only `playable: false` is refused."""
     return item.get("playable") is not False
+
+
+def has_matched_source(item):
+    """The import recorded a matched source row for this song."""
+    if not item.get("platform"):
+        return False
+    return (item.get("status") or "matched") != "missing"
 
 
 def website_ready(task):
@@ -568,7 +576,23 @@ def compare(item):
         "playlist_status": item.get("status") or "",
         "playlist_platform": item.get("platform") or "",
         "playlist_row_id": item.get("id") or "",
+        "verified_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     })
+
+    if not has_matched_source(item):
+        # The import itself recorded no matched source, so there is nothing to
+        # compare: no request is sent for either side. This is the import's
+        # state, not a playback verdict - the app and the website both still
+        # try the row id at play time, and an exploratory run showed that two
+        # of these rows (732, 834) do resolve to netease.
+        row.update({
+            "app_task_status": "missing_unplayable",
+            "result": RESULT_MISSING,
+            "difference": "歌单行没有匹配音源（platform 为空 / status=missing），不构造空参数请求；"
+                          "App 与网站运行期仍会用行 id 尝试，探索扫描中 732/834 两行真能解析成 netease",
+            "round_log": "未发起请求（导入未匹配）",
+        })
+        return row
 
     web_body = website_request(item)
     app_body = app_request(item)
@@ -583,6 +607,7 @@ def compare(item):
         notes.append("传输参数不同（网站 wasm_alac / App null）：Apple Music 无损需要网站的 WebAssembly 解码器，"
                      "App 改用同一任务的兼容音频，音源与档位不变，真机未验证")
     row["transport_note"] = "；".join(notes)
+    row["round_log"] = "首轮"
 
     sides = {}
     for prefix, body, ready_predicate, url_builder in (
@@ -748,6 +773,49 @@ def write_csv(path, rows):
             writer.writerow({field: row.get(field, "") for field in CSV_FIELDS})
 
 
+def read_csv_rows(path):
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def script_identity():
+    """Bind the report to the script and commit that produced it."""
+    path = os.path.join(REPO, "scripts", "align_report.py")
+    digest = hashlib.sha256(read_bytes(path)).hexdigest() if os.path.exists(path) else ""
+    commit = ""
+    branch = ""
+    try:
+        commit = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True,
+                                text=True, encoding="utf-8").stdout.strip()
+        branch = subprocess.run(["git", "-C", REPO, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
+                                text=True, encoding="utf-8").stdout.strip()
+        dirty = subprocess.run(["git", "-C", REPO, "status", "--porcelain", "--", "scripts/align_report.py", "ApuMusic"],
+                               capture_output=True, text=True, encoding="utf-8").stdout.strip()
+    except OSError:
+        dirty = ""
+    return {"path": "scripts/align_report.py", "sha256": digest, "git_commit": commit,
+            "git_branch": branch, "uncommitted_paths": dirty}
+
+
+def publish(rows, report_path, unplayable_path, summary_path, summary):
+    rows.sort(key=lambda row: int(row.get("index") or 0))
+    write_csv(report_path, rows)
+    write_csv(unplayable_path, [row for row in rows if row.get("result") in (RESULT_UNPLAYABLE, RESULT_MISSING)])
+    counts = {}
+    for row in rows:
+        counts[row.get("result") or "未知"] = counts.get(row.get("result") or "未知", 0) + 1
+    summary["songs"] = len(rows)
+    summary["counts"] = counts
+    with open(summary_path, "w", encoding="utf-8", newline="") as handle:
+        json.dump(summary, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    log("报告：{}".format(report_path))
+    log("不可播：{}".format(unplayable_path))
+    log("汇总：{}".format(summary_path))
+    log(json.dumps({"counts": counts, "songs": len(rows)}, ensure_ascii=False))
+    return counts
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=0, help="only the first N songs")
@@ -757,6 +825,10 @@ def main():
     parser.add_argument("--out", default=os.path.join(REPO, "reports"))
     parser.add_argument("--website-src", default=WEBSITE_DEFAULT)
     parser.add_argument("--resume", action="store_true", help="keep rows from a previous run")
+    parser.add_argument("--confirm", default="",
+                        help="merge a confirmation pass CSV: rows of the same playlist index replace the base report")
+    parser.add_argument("--finalize", nargs="*",
+                        help="recompute counts/request totals and bind the final script commit; extra args are pass summaries")
     parser.add_argument("--skip-guard", action="store_true", help="skip shipped-code checks (testing only)")
     arguments = parser.parse_args()
 
@@ -772,6 +844,59 @@ def main():
                 log("SOURCE GUARD: " + problem)
             raise SystemExit("shipped code no longer matches what this script models")
         log("source guard: app and website expressions verified")
+
+    if arguments.finalize is not None:
+        # Final publication: counts are recomputed from the finished CSV and
+        # the summary is bound to the exact committed script that produced it.
+        base = read_csv_rows(report_path)
+        summary = json.load(open(summary_path, encoding="utf-8")) if os.path.exists(summary_path) else {}
+        passes = [{"file": report_path, "requests": summary.get("requests_sent", 0),
+                   "elapsed_seconds": summary.get("elapsed_seconds", 0)}]
+        total_requests = summary.get("requests_sent", 0)
+        for path in arguments.finalize:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            passes.append({"file": path, "requests": data.get("requests_sent", 0),
+                           "elapsed_seconds": data.get("elapsed_seconds", 0)})
+            total_requests += data.get("requests_sent", 0)
+        summary["requests_sent"] = total_requests
+        summary["passes"] = passes
+        summary["script"] = script_identity()
+        summary["finalized_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        publish(base, report_path, unplayable_path, summary_path, summary)
+        return 0
+
+    if arguments.confirm:
+        # A song the backend refused while a long scan was running can answer
+        # normally a minute later (the website retries on the next tap too).
+        # The confirmation pass is a second, small run over exactly the rows
+        # that were not identical; its rows replace the base ones and the
+        # original result stays visible in the difference text.
+        base = read_csv_rows(report_path)
+        confirm = {row["index"]: row for row in read_csv_rows(arguments.confirm)}
+        merged = []
+        replaced = 0
+        for row in base:
+            if not row.get("round_log"):
+                row["round_log"] = "首轮"
+            replacement = confirm.get(row["index"])
+            if not replacement:
+                merged.append(row)
+                continue
+            replaced += 1
+            replacement["difference"] = "二次确认覆盖（原结果：{}）{}".format(
+                row["result"], ("；" + replacement["difference"]) if replacement["difference"] else "")
+            incoming = replacement.get("round_log") or "确认"
+            if incoming.startswith("首轮"):
+                incoming = "确认" + incoming[2:]
+            previous = row.get("round_log") or ""
+            replacement["round_log"] = (previous + " → " if previous else "") + incoming
+            merged.append(replacement)
+        summary = json.load(open(summary_path, encoding="utf-8")) if os.path.exists(summary_path) else {}
+        summary["confirmation_pass"] = {"file": arguments.confirm, "replaced_rows": replaced,
+                                        "merged_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        publish(merged, report_path, unplayable_path, summary_path, summary)
+        return 0
 
     name, items = fetch_playlist()
     log("playlist: {} ({} songs)".format(name, len(items)))
@@ -817,19 +942,10 @@ def main():
                 # usable through --resume instead of losing an hour of requests.
                 write_csv(report_path, sorted(rows, key=lambda item: int(item.get("index") or 0)))
 
-    rows.sort(key=lambda row: int(row.get("index") or 0))
-    write_csv(report_path, rows)
-    write_csv(unplayable_path, [row for row in rows if row.get("result") == RESULT_UNPLAYABLE])
-
-    counts = {}
-    for row in rows:
-        counts[row.get("result") or "未知"] = counts.get(row.get("result") or "未知", 0) + 1
     summary = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "playlist": name,
         "playlist_id": PLAYLIST_ID,
-        "songs": len(rows),
-        "counts": counts,
         "website_quality": WEBSITE_QUALITY_DEFAULT,
         "app_quality": APP_QUALITY_DEFAULT,
         "concurrency": concurrency,
@@ -840,23 +956,20 @@ def main():
         "report": report_path,
         "unplayable_report": unplayable_path,
         "source_digests": source_digests(arguments.website_src),
+        "script": script_identity(),
         "notes": [
             "音源/歌曲ID 取自 POST /api/v1/playbacks 返回的 platform、track_id。",
             "实际音质取自 /playbacks/{id}/audio 重定向后真实响应的容器与 Content-Range 总字节数，按歌曲时长换算平均码率；缺任一条件记未验证，不用请求档位代替。",
             "播放URL 只比较 scheme/host/路径模板/后缀，签名与动态 id 不比较。",
-            "网站侧按 App.vue/music.js/track.js/status.js/media-routing.js 推导；App 侧按 ApuMusic/PlaybackResolver.swift 与 Models.swift 推导，两侧代码互相独立。",
+            "网站侧按本地前端源码 App.vue/music.js/track.js/status.js/media-routing.js 推导；App 侧按 ApuMusic/PlaybackResolver.swift 与 Models.swift 推导，两侧代码互相独立。本地前端源码不等于线上部署版本，线上行为只由本次接口请求证据说明。",
             "Apple Music 无损：网站请求 streaming_mode=wasm_alac（需要其 WebAssembly 解码器），App 固定 null（用同一任务的兼容音频）。默认档位 high 下两者都为 null；出现差异的行在 transport_note 与 request_match 中单独标出，不视为等价。",
             "一首歌只请求其已匹配的那一行，不跨平台换源（与网站核心播放器一致）。",
+            "导入未匹配的行（platform 空 / status=missing）记“不可播（缺匹配源）”，不构造空参数请求；与“有匹配源但后端失败”的不可播分开计数。",
+            "长时间扫描时后端偶尔会把个别行瞬时判为 failed/unplayable，同一请求稍后再发就正常；这类行用独立的小规模二次确认补齐，round_log 保留首轮与确认结果，不隐去差异。",
         ],
     }
-    with open(summary_path, "w", encoding="utf-8", newline="") as handle:
-        json.dump(summary, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-
-    log("报告：{}".format(report_path))
-    log("不可播：{}".format(unplayable_path))
-    log("汇总：{}".format(summary_path))
-    log(json.dumps({"counts": counts, "songs": len(rows)}, ensure_ascii=False))
+    publish(rows, report_path, unplayable_path, summary_path, summary)
+    return 0
 
 
 if __name__ == "__main__":
