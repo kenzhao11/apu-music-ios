@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// One song's playback request, built from the website's own source:
 /// `App.vue` `createPlayback()` → `apis/music.js` `POST /api/v1/playbacks`.
@@ -20,11 +21,11 @@ struct PlaybackTarget: Equatable {
         self.query = track.song
         self.selectedId = track.playbackSelectionID
         self.quality = quality
-        // App.vue:195-198 + core/player/alac-support.js `canRequestAlacPlayback`:
-        // wasm_alac only for Apple Music lossless tiers. This is the same
-        // request the website posts; the app then uses the audio URL the
-        // backend returns for that task (never a different representation).
-        self.streamingMode = platform == "applemusic" && quality.isLossless ? "wasm_alac" : nil
+        // The app always uses the backend's native `audio_url` and never the
+        // website's WebAssembly packet transport, so it asks for the default
+        // transport. This is the same native request the website makes when
+        // its own player cannot use the ALAC packet stream (App.vue:339-348).
+        self.streamingMode = nil
     }
 
     var request: PlaybackRequest {
@@ -40,17 +41,22 @@ struct PreparedPlayback {
 }
 
 enum PlaybackResolver {
+    private static let logger = Logger(subsystem: "ApuMusic", category: "playback")
+
     static func prepare(track: Track, quality: PlaybackQuality = .siteQuality) async throws -> PreparedPlayback {
         guard track.canPlay else {
             throw PlaybackError.unplayable("这首歌暂时无法播放。")
         }
-        let created = try await MusicAPI.createPlayback(PlaybackTarget(track: track, quality: quality).request).task
+        let target = PlaybackTarget(track: track, quality: quality)
+        let created = try await MusicAPI.createPlayback(target.request).task
         let ready = try await waitUntilReady(created)
         // `audio_url` only: `alac_source_url` is the web player's packet
         // transport, and no transcoding or substitute URL is used here.
         guard let url = ready.nativeAudioURL(relativeTo: MusicAPI.base) else {
             throw PlaybackError.unavailable(ready.error ?? "服务器没有返回可播放的音频地址。")
         }
+        // One line per prepared playback, for on-device diagnosis.
+        logger.info("selected_id=\(target.selectedId, privacy: .public) task=\(ready.id, privacy: .public) audio_url=\(url.absoluteString, privacy: .public)")
         return PreparedPlayback(task: ready, audioURL: url)
     }
 

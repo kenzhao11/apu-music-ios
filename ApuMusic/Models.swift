@@ -494,7 +494,7 @@ struct PlaybackRequest: Encodable {
         try values.encode(query, forKey: .query)
         try values.encode(selectedId, forKey: .selectedId)
         try values.encode(quality, forKey: .quality)
-        try values.encodeIfPresent(streamingMode, forKey: .streamingMode)
+        try values.encode(streamingMode, forKey: .streamingMode)
         try values.encode(false, forKey: .includeCover)
     }
 }
