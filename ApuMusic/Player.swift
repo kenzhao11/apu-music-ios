@@ -352,6 +352,14 @@ final class Player: ObservableObject {
         playbackQueue = PlaybackQueue(tracks: queue, startingAt: queue[currentIndex])
         prepareCurrent()
     }
+
+    /// First-track swipe down: restart the current song instead of wrapping
+    /// around to the last queue item.
+    func restartCurrent() {
+        seek(to: 0)
+        if !isPlaying { play() }
+    }
+
     private func appendContinuation(selection selected: UUID) async {
         guard let current else { return }
         let request = ContinueRequest(

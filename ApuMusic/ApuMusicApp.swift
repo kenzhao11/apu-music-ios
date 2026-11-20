@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct ApuMusicApp: App {
@@ -529,13 +530,30 @@ struct NowPlayingScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showingLyrics = false
     @State private var showingQueue = false
+    @State private var coverOffset: CGFloat = 0
+    @State private var coverOpacity: Double = 1
+    @State private var coverSwitching = false
+
+    private var coverSize: CGFloat { min(UIScreen.main.bounds.width - 46, 376) }
+
     var body: some View {
         VStack(spacing: 0) {
             playerHeader
             ScrollView {
                 VStack(spacing: 22) {
-                    Artwork(url: player.current?.artwork, size: min(UIScreen.main.bounds.width - 46, 376))
-                        .padding(.top, 4)
+                    ZStack {
+                        Artwork(url: player.current?.artwork, size: coverSize)
+                            .id(player.current?.id ?? "")
+                            .offset(y: coverOffset)
+                            .opacity(coverOpacity)
+                    }
+                    .frame(width: coverSize, height: coverSize)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(coverSwipe)
+                    .accessibilityLabel("歌曲封面")
+                    .accessibilityHint("上滑下一首，下滑上一首")
+                    .padding(.top, 4)
                     HStack(spacing: 15) {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(player.current?.song ?? "").font(.system(size: 22, weight: .bold)).lineLimit(2)
@@ -625,6 +643,101 @@ struct NowPlayingScreen: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
             }
+        }
+    }
+
+    private var coverSwipe: some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                guard !coverSwitching else { return }
+                let vertical = value.translation.height
+                guard abs(vertical) > abs(value.translation.width) else { return }
+                coverOffset = vertical
+                coverOpacity = 1 - min(abs(vertical) / (coverSize * 3), 0.22)
+            }
+            .onEnded { value in
+                guard !coverSwitching else { return }
+                let vertical = value.translation.height
+                let horizontal = value.translation.width
+                let predicted = value.predictedEndTranslation.height
+                let predictedHorizontal = value.predictedEndTranslation.width
+                let verticalDominant = abs(vertical) > abs(horizontal) * 1.35
+                let predictedDominant = abs(predicted) > abs(predictedHorizontal) * 1.35
+                let shouldSwitch = verticalDominant
+                    && (abs(vertical) > 60 || (predictedDominant && abs(predicted) > 140))
+                guard shouldSwitch else {
+                    bounceCover(up: vertical < 0)
+                    return
+                }
+                if vertical < 0 { nextFromCover() } else { previousFromCover() }
+            }
+    }
+
+    private func nextFromCover() {
+        guard !player.queue.isEmpty else { return }
+        let canAdvance = player.shuffled || player.repeatMode == 1 || player.currentIndex < player.queue.count - 1
+        guard canAdvance else {
+            bounceCover(up: true)
+            return
+        }
+        moveCover(direction: -1) { await player.next() }
+    }
+
+    private func previousFromCover() {
+        guard !player.queue.isEmpty else { return }
+        if !player.shuffled && player.currentIndex == 0 {
+            bounceCover(up: false)
+            player.restartCurrent()
+            return
+        }
+        moveCover(direction: 1) { await player.previous() }
+    }
+
+    private func moveCover(direction: CGFloat, action: @escaping () async -> Void) {
+        coverSwitching = true
+        withAnimation(.easeOut(duration: 0.16)) {
+            coverOffset = direction * coverSize * 0.55
+            coverOpacity = 0
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            let before = player.current?.id
+            await action()
+            let changed = player.current?.id != before
+            coverOffset = -direction * coverSize * 0.38
+            coverOpacity = 0
+            // Let the new artwork identity commit at the incoming edge before
+            // animating it into place.
+            try? await Task.sleep(for: .milliseconds(16))
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
+                coverOffset = 0
+                coverOpacity = 1
+            }
+            if changed {
+                let feedback = UIImpactFeedbackGenerator(style: .light)
+                feedback.impactOccurred()
+            }
+            coverSwitching = false
+        }
+    }
+
+    private func bounceCover(up: Bool) {
+        guard !coverSwitching else { return }
+        // A horizontal or tap-like gesture never moved the cover, so there is
+        // nothing to spring back from.
+        guard abs(coverOffset) > 1 else { return }
+        coverSwitching = true
+        withAnimation(.easeOut(duration: 0.12)) {
+            coverOffset = up ? -24 : 24
+            coverOpacity = 0.86
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(110))
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) {
+                coverOffset = 0
+                coverOpacity = 1
+            }
+            coverSwitching = false
         }
     }
 
