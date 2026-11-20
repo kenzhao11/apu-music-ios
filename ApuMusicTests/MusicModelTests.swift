@@ -3,18 +3,22 @@ import XCTest
 
 final class MusicModelTests: XCTestCase {
     func testSearchAndImportedPlaylistTracksDecodeStringAndNumericIdentifiers() throws {
-        let json = Data(#"[{"id":2138,"platform":"tencent","song":"Hello","singer":"Adele","source_id":"002Il7Ya1tZ6UZ","playable":true},{"id":"1","platform":"kugou","song":"First song","singer":"Artist","status":"matched"},{"id":"335","platform":"","song":"Unavailable","singer":"Artist","status":"missing"}]"#.utf8)
+        let json = Data(#"[{"id":2138,"platform":"tencent","song":"Hello","singer":"Adele","source_id":"002Il7Ya1tZ6UZ","playable":true},{"id":"1","platform":"kugou","song":"First song","singer":"Artist","status":"matched"},{"id":"335","platform":"","song":"Unavailable","singer":"Artist","status":"missing"},{"id":"9","platform":"netease","song":"Nope","singer":"Artist","playable":false}]"#.utf8)
 
         let tracks = try JSONDecoder().decode([Track].self, from: json)
 
-        XCTAssertEqual(tracks.map(\.id), ["2138", "1", "335"])
+        XCTAssertEqual(tracks.map(\.id), ["2138", "1", "335", "9"])
         XCTAssertEqual(tracks[0].sourceId, "002Il7Ya1tZ6UZ")
         XCTAssertTrue(tracks[0].canPlay)
-        XCTAssertFalse(tracks[2].canPlay)
+        // A missing import match is still attempted: the backend can resolve it
+        // by row id, exactly like the website.
+        XCTAssertTrue(tracks[2].canPlay)
+        // Only an explicit backend refusal stops the app from asking.
+        XCTAssertFalse(tracks[3].canPlay)
     }
 
     func testPlaybackRequestUsesServerFieldNames() throws {
-        let request = PlaybackRequest(platform: "tencent", query: "Hello", selectedId: "2138")
+        let request = PlaybackRequest(platform: "tencent", query: "Hello", selectedId: "2138", quality: "standard")
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
 
         XCTAssertEqual(json["selected_id"] as? String, "2138")
@@ -22,6 +26,21 @@ final class MusicModelTests: XCTestCase {
         XCTAssertEqual(json["quality"] as? String, "standard")
         XCTAssertTrue(json.keys.contains("streaming_mode"))
         XCTAssertNil(json["streaming_mode"] as? String)
+    }
+
+    func testPlaybackTargetPostsTheRowIDTheWebsitePosts() throws {
+        let json = Data(#"{"id":2138,"platform":"tencent","song":"Hello","singer":"Adele","source_id":"002Il7Ya1tZ6UZ"}"#.utf8)
+        let track = try JSONDecoder().decode(Track.self, from: json)
+
+        let target = PlaybackTarget(track: track, quality: .high)
+
+        // App.vue: selectedId = track.selected_id || track.source_id, and
+        // utils/track.js sets selected_id to the row id the API returned.
+        XCTAssertEqual(target.selectedId, "2138")
+        XCTAssertEqual(target.query, "Hello")
+        XCTAssertEqual(target.platform, "tencent")
+        XCTAssertEqual(target.quality.rawValue, "high")
+        XCTAssertNil(target.streamingMode)
     }
 
     func testPlaybackSelectionKeepsThePlatformTrackIDInsteadOfSourceID() throws {
@@ -45,8 +64,10 @@ final class MusicModelTests: XCTestCase {
         let merged = TrackDeduplicator.merge(tracks)
 
         XCTAssertEqual(merged.count, 2)
-        XCTAssertEqual(merged[0].sources.count, 2)
-        XCTAssertEqual(merged[0].sources.map(\.platform), ["tencent", "netease"])
+        XCTAssertEqual(merged[0].metadataSources.count, 2)
+        XCTAssertEqual(merged[0].metadataSources.map(\.platform), ["tencent", "netease"])
+        // Metadata only: playback always posts the first matched row.
+        XCTAssertEqual(merged[0].playbackSelectionID, "2138")
     }
 
     func testUnplayableTrackNeverGetsAFallbackPlaybackCandidate() throws {
@@ -54,7 +75,7 @@ final class MusicModelTests: XCTestCase {
         let track = try JSONDecoder().decode(Track.self, from: data)
 
         XCTAssertFalse(track.canPlay)
-        XCTAssertTrue(track.sources.isEmpty)
+        XCTAssertTrue(track.metadataSources.isEmpty)
     }
 
     func testPlaybackSelectionUsesSelectedIDWhenSearchRowsHavePlaybackMetadataIDs() throws {
@@ -73,8 +94,18 @@ final class MusicModelTests: XCTestCase {
         XCTAssertEqual(task.nativeAudioURL(relativeTo: MusicAPI.base)?.query, "v=2138")
     }
 
-    func testStreamingLosslessWithoutNativeCodecWaitsForCompletedAudio() throws {
+    func testGrowingNativeFlacIsPlayableExactlyLikeTheWebsite() throws {
         let json = Data(#"{"id":"task-1","status":"streaming","audio_url":"/api/v1/playbacks/task-1/audio","quality":"lossless","format":"flac"}"#.utf8)
+        let task = try JSONDecoder().decode(PlaybackTask.self, from: json)
+
+        // waitForReady() treats a growing plain FLAC as decodable, so the app
+        // may start on it too; a failing decoder falls back to the local
+        // transcode path inside the same song (never another source).
+        XCTAssertNotNil(task.nativeAudioURL(relativeTo: MusicAPI.base))
+    }
+
+    func testLosslessWithoutNativeProgressiveBytesWaitsForCompletedAudio() throws {
+        let json = Data(#"{"id":"task-2","status":"streaming","audio_url":"/api/v1/playbacks/task-2/audio","quality":"lossless","format":"m4a"}"#.utf8)
         let task = try JSONDecoder().decode(PlaybackTask.self, from: json)
 
         XCTAssertNil(task.nativeAudioURL(relativeTo: MusicAPI.base))
