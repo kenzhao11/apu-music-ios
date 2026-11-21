@@ -172,11 +172,8 @@ final class BackgroundAudioDownload: NSObject, URLSessionDownloadDelegate, @unch
             } else if let track = metadata.track {
                 // Relaunched by iOS after a background transfer completed.
                 // Persist before acknowledging background session events.
-                do { try DownloadStore.add(track, file: saved) }
-                catch {
-                    try? FileManager.default.removeItem(at: saved)
-                    throw error
-                }
+                defer { try? FileManager.default.removeItem(at: saved) }
+                try DownloadStore.add(track, file: saved)
             } else {
                 try? FileManager.default.removeItem(at: saved)
             }

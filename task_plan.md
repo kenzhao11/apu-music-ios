@@ -21,11 +21,16 @@
 
 ## 阶段
 - [x] 阶段 0：仓库与线上接口现状核对（HEAD 25ad1ff，403 偶发需退避）
-- [ ] 阶段 1：落盘取证脚本并跑真实取证 → reports/
+- [x] 阶段 1：30 首真实取证已落盘 → reports/search_download_report.csv（全部首次观察 completed，streaming 未观察）
 - [x] 阶段 2：修复 CompatibleAudio / DownloadManager / PlaybackResolver / Player；审核意见四项已完成代码修正，待复审
 - [x] 阶段 3：DONE.md 汇总真实失败统计与修法（含本轮审核修正与未验证边界）
 - [ ] 阶段 4：审核通过后合并 main；仅运行 ios-package-only 打包，校验 IPA 并放桌面
-- [x] 阶段 5：初审被拒（700c299），按四项阻塞修正并提交，现 rework 复审中
+- [x] 阶段 5：初审四项阻塞已在 de3a811 修正；复审新增临时音频遗留，恢复分支已改 defer 清理，待再次复审
+
+## 当前续接状态
+- 分支：fix/music-download-build8；保持 build8。
+- 仅修恢复下载的临时文件生命周期，未触碰另一开发分支及未跟踪探查文件。
+- 下一步：提交本次修正并送固定审核；通过后合并 main，仅编译打包。
 
 ## 已确认的真实接口事实（2026-11-21）
 - `POST /api/v1/playbacks` 参数：`platform, query=歌名, selected_id=行id, quality=high, streaming_mode=null, include_cover=false`；403 为偶发，需退避重试。
