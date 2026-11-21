@@ -29,6 +29,12 @@
 - 审核开发对 `de3a811..fe4c67e` 的结论原文：「通过。问题清单：无新增阻塞项。」确认恢复分支 defer 覆盖成功与失败，Documents 副本不受清理影响，普通下载路径未改变；未删改测试。
 - 上述为代码静态修正，未执行测试或真机验证。审核通过后合并 main，仅启动 `ios-package-only.yml`；推送提交使用 `[skip ci]`，避免旧 push 工作流自动运行模拟器测试。构建和包校验结果另记交付记录。
 
+## build8 编译修正（待审核/重新打包）
+
+- 原仅打包 run `44887781118` 于 2026-11-21 17:04:46 北京时间结束为 failure，不是仍在执行。失败日志指向 `Player.swift:244:63` 与 `:128`：Logger.error 的插值自动闭包引用实例属性须明确写 `self`。
+- 最小修复仅将 `current`、`activePlaybackTaskID` 改为 `self.current`、`self.activePlaybackTaskID`；保留日志隐私级别及下载/播放行为。其余同文件 Logger 调用未发现同类实例属性捕获。
+- 尚未宣称编译通过或 IPA 交付；待固定审核复核后仅跑 package-only，成功下载并验证后补齐证据。按要求不新增/运行测试、模拟器或真机操作。
+
 ## 边界与未验证
 
 没有改动线上 Worker、D1、后端或网站。按要求未运行测试、模拟器、截图、真机或云端测试。当前环境是 Windows，无法本地运行 Xcode；只能由 `ios-package-only` macOS 工作流做 Release 编译并出 unsigned IPA。后台 URLSession 下载恢复、真实断点续传、AVPlayer 播放重试及 UI 行为均待真机验收。

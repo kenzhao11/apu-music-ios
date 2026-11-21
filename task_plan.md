@@ -28,10 +28,13 @@
 - [x] 阶段 5：初审四项阻塞已在 de3a811 修正；复审临时音频遗留已在 fe4c67e 修正，审核开发静态复审通过，无新增阻塞项
 
 ## 当前续接状态
-- 分支：fix/music-download-build8；保持 build8。
+- 当前增量分支：fix/music-build8-log-capture；保持 0.1.0/build8。
 - 仅修恢复下载的临时文件生命周期，未触碰另一开发分支及未跟踪探查文件。
 - 审核结论：fe4c67e 已通过固定审核开发只读复审。
-- 下一步：以 [skip ci] 文档提交合并 main（避免旧 push 测试工作流），手动运行 ios-package-only；下载 IPA 到桌面并检查包内版本。
+- 已合并并推送 main：b908a0e79a686754e27c002be01a499b15581144（[skip ci]，未启动旧 push 测试工作流）。
+- 旧仅打包 run：44887781118 已于 2026-11-21 17:04:46 北京时间 completed/failure，不能再当作正在打包。已读取失败日志：Player.swift:244 的 Logger.error 插值自动闭包访问 current 与 activePlaybackTaskID 缺少显式 self。
+- 本轮最小修复：仅对这两个实例属性补 self.；同文件其余 Logger 调用为局部变量/参数，无同类实例属性捕获。未改变下载、播放或重试行为，未运行测试。
+- 下一步：提交增量交固定审核开发复核；通过后合入 main，仅启动 ios-package-only。成功后下载桌面 IPA，核验字节大小、包内版本和构建 commit；若仍运行仅设置一次完成条件等待。
 
 ## 已确认的真实接口事实（2026-11-21）
 - `POST /api/v1/playbacks` 参数：`platform, query=歌名, selected_id=行id, quality=high, streaming_mode=null, include_cover=false`；403 为偶发，需退避重试。

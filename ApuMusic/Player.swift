@@ -241,7 +241,7 @@ final class Player: ObservableObject {
         guard engine?.currentItem === item else { return }
         let failure = item.error ?? error ?? engine?.error ?? URLError(.cannotDecodeContentData)
         let errorCode = (failure as NSError).code
-        Self.logger.error("AVPlayerItem failed selected_id=\((current?.playbackSelectionID ?? ""), privacy: .private) taskID=\(activePlaybackTaskID, privacy: .private) domain=\((failure as NSError).domain, privacy: .public) code=\(errorCode)")
+        Self.logger.error("AVPlayerItem failed selected_id=\((self.current?.playbackSelectionID ?? ""), privacy: .private) taskID=\(self.activePlaybackTaskID, privacy: .private) domain=\((failure as NSError).domain, privacy: .public) code=\(errorCode)")
         clearEngine()
         let startupTimedOut = (failure as? PlaybackError)?.localizedDescription.contains("超时") == true
         if (PlaybackFailure.isNetwork(failure) || startupTimedOut), networkPlaybackRetries == 0,
