@@ -1,8 +1,18 @@
 import SwiftUI
 import UIKit
 
+@MainActor
+final class ApuMusicAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        guard identifier == BackgroundAudioDownload.sessionIdentifier else { completionHandler(); return }
+        BackgroundAudioDownload.shared.reconnect(completion: completionHandler)
+    }
+}
+
 @main
 struct ApuMusicApp: App {
+    @UIApplicationDelegateAdaptor(ApuMusicAppDelegate.self) private var appDelegate
     @StateObject private var player = Player()
     @StateObject private var downloads = DownloadManager()
     @StateObject private var favorites = FavoriteLibrary()
@@ -591,7 +601,8 @@ struct NowPlayingScreen: View {
                         }
                         Button { if let current = player.current { downloads.download(current) } } label: {
                             if let progress = downloads.progress[player.current?.id ?? ""] {
-                                ProgressView(value: progress).frame(width: 22)
+                                if downloads.preparing.contains(player.current?.id ?? "") { ProgressView() }
+                                else { ProgressView(value: progress).frame(width: 22) }
                             } else {
                                 Image(systemName: "arrow.down.to.line").font(.system(size: 20)).foregroundStyle(.white)
                             }
@@ -943,7 +954,8 @@ struct TrackRow: View {
             }
             Button { downloads.download(track) } label: {
                 if let progress = downloads.progress[track.id] {
-                    ProgressView(value: progress).frame(width: 21)
+                    if downloads.preparing.contains(track.id) { ProgressView() }
+                    else { ProgressView(value: progress).frame(width: 21) }
                 } else if downloads.errors[track.id] != nil {
                     Image(systemName: "exclamationmark.circle")
                         .font(.system(size: 15)).foregroundStyle(Color.orange)

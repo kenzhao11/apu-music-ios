@@ -73,8 +73,17 @@ enum MusicAPI {
         guard let url = components.url else { throw URLError(.badURL) }
         let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 12))
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-        if let tracks = try? JSONDecoder().decode([Track].self, from: data) { return tracks }
-        return try JSONDecoder().decode(SearchResponse.self, from: data).tracks
+        let tracks: [Track]
+        if let rows = try? JSONDecoder().decode([Track].self, from: data) { tracks = rows }
+        else { tracks = try JSONDecoder().decode(SearchResponse.self, from: data).tracks }
+        // Match trackFromSearch: the search row id selects playback, while
+        // source_id is separate metadata (lyrics/identity), never a fallback.
+        return tracks.map { row in
+            var track = row
+            track.selectedId = row.id
+            track.sourceId = row.sourceId.flatMap { $0.isEmpty ? nil : $0 } ?? row.id
+            return track
+        }
     }
 
     static func playbackStatus(id: String, since: String) async throws -> PlaybackStatusResponse {
@@ -88,13 +97,29 @@ enum MusicAPI {
     }
 
     private static func playbackResponse(for request: URLRequest) async throws -> PlaybackStatusResponse {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        var result: (Data, URLResponse)?
+        for attempt in 0...1 {
+            do {
+                let response = try await URLSession.shared.data(for: request)
+                if let http = response.1 as? HTTPURLResponse,
+                   [408, 429, 500, 502, 503, 504].contains(http.statusCode) {
+                    throw URLError(.badServerResponse)
+                }
+                result = response
+                break
+            } catch {
+                guard attempt == 0, PlaybackFailure.isNetwork(error) else { throw error }
+                try await Task.sleep(for: .milliseconds(350))
+            }
+        }
+        guard let (data, response) = result, let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(http.statusCode) else {
+            if [408, 429, 500, 502, 503, 504].contains(http.statusCode) {
+                throw URLError(.badServerResponse)
+            }
             let payload = try? JSONDecoder().decode(PlaybackAPIError.self, from: data)
-            let reason = payload?.detail ?? payload?.error
-            let message = reason.flatMap { $0.isEmpty ? nil : $0 } ?? "服务器返回 HTTP \(http.statusCode)。"
-            throw PlaybackError.unavailable(message)
+            throw PlaybackError.unavailable(PlaybackFailure.message(
+                URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: payload?.detail ?? payload?.error ?? ""])))
         }
         do {
             return try JSONDecoder().decode(PlaybackStatusResponse.self, from: data)
@@ -125,6 +150,27 @@ enum PlaybackError: LocalizedError {
     var isUnplayable: Bool {
         if case .unplayable = self { return true }
         return false
+    }
+}
+
+enum PlaybackFailure {
+    static func isNetwork(_ error: Error) -> Bool {
+        let failure = error as NSError
+        if failure.domain == NSURLErrorDomain {
+            return [NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet,
+                    NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed,
+                    NSURLErrorBadServerResponse, NSURLErrorResourceUnavailable].contains(failure.code)
+        }
+        if let underlying = failure.userInfo[NSUnderlyingErrorKey] as? NSError {
+            return isNetwork(underlying)
+        }
+        return false
+    }
+
+    static func message(_ error: Error) -> String {
+        if (error as? PlaybackError)?.isUnplayable == true { return "这首歌暂时无法播放。" }
+        if isNetwork(error) { return "网络连接不稳定，请稍后重试。" }
+        return "音频暂时无法获取，请稍后重试。"
     }
 }
 
@@ -166,8 +212,10 @@ struct Track: Codable, Identifiable, Hashable {
         album = try values.decodeIfPresent(String.self, forKey: .album)
         duration = try values.decodeIfPresent(Double.self, forKey: .duration)
         cover = try values.decodeIfPresent(String.self, forKey: .cover)
-        sourceId = try values.decodeIfPresent(String.self, forKey: .sourceId)
-        selectedId = try values.decodeIfPresent(String.self, forKey: .selectedId)
+        sourceId = (try? values.decodeIfPresent(String.self, forKey: .sourceId))
+            ?? (try? values.decode(Int64.self, forKey: .sourceId)).map(String.init)
+        selectedId = (try? values.decodeIfPresent(String.self, forKey: .selectedId))
+            ?? (try? values.decode(Int64.self, forKey: .selectedId)).map(String.init)
         alternateCandidates = try values.decodeIfPresent([PlaybackCandidate].self, forKey: .alternateCandidates)
             ?? values.decodeIfPresent([PlaybackCandidate].self, forKey: .playbackCandidates)
         playable = try values.decodeIfPresent(Bool.self, forKey: .playable)

@@ -48,7 +48,7 @@ final class Player: ObservableObject {
     let progress = PlaybackProgress()
     let lyrics = PlaybackLyrics()
 
-    private static let logger = Logger(subsystem: "fr.kdns.kenmusic.apu", category: "playback")
+    private static let logger = Logger(subsystem: "ApuMusic", category: "playback")
     private var playbackQueue = PlaybackQueue()
     private var engine: AVPlayer?
     private var itemStatusObservation: NSKeyValueObservation?
@@ -68,6 +68,8 @@ final class Player: ObservableObject {
     private var loggedStart = false
     private var prefetchTrackID: String?
     private var consecutiveFailures = 0
+    private var networkPlaybackRetries = 0
+    private var activePlaybackTaskID = ""
     private var station = ""
     private var lockScreenArtwork: MPMediaItemArtwork?
 
@@ -116,6 +118,8 @@ final class Player: ObservableObject {
         let selected = selection
         selectedAt = .now
         loggedStart = false
+        networkPlaybackRetries = 0
+        activePlaybackTaskID = ""
         clearEngine()
         current = track
         playbackMessage = "正在准备音频…"
@@ -152,6 +156,7 @@ final class Player: ObservableObject {
                     prepared = try await PlaybackResolver.prepare(track: track)
                 }
                 guard !Task.isCancelled, self.selection == selected else { return }
+                self.activePlaybackTaskID = prepared.task.id
                 self.install(prepared)
             } catch {
                 guard !Task.isCancelled, self.selection == selected else { return }
@@ -235,9 +240,16 @@ final class Player: ObservableObject {
     private func handleItemFailure(_ item: AVPlayerItem, error: Error?) {
         guard engine?.currentItem === item else { return }
         let failure = item.error ?? error ?? engine?.error ?? URLError(.cannotDecodeContentData)
-        Self.logger.error("AVPlayerItem.error: \(String(reflecting: failure as NSError), privacy: .private)")
-        Self.logger.error("AVPlayer error domain=\((failure as NSError).domain, privacy: .public) code=\((failure as NSError).code)")
+        let errorCode = (failure as NSError).code
+        Self.logger.error("AVPlayerItem failed selected_id=\((current?.playbackSelectionID ?? ""), privacy: .private) taskID=\(activePlaybackTaskID, privacy: .private) domain=\((failure as NSError).domain, privacy: .public) code=\(errorCode)")
         clearEngine()
+        if PlaybackFailure.isNetwork(failure), networkPlaybackRetries == 0,
+           let current, current.canPlay {
+            networkPlaybackRetries += 1
+            playbackMessage = "网络连接不稳定，正在重试…"
+            resolveAudio(for: current, selection: selection)
+            return
+        }
         reportPlaybackFailure(failure)
     }
 
@@ -259,10 +271,8 @@ final class Player: ObservableObject {
         playbackFailed = true
         if let urlError = error as? URLError, [.notConnectedToInternet, .networkConnectionLost, .timedOut].contains(urlError.code) {
             playbackMessage = "网络连接异常，请检查网络后重试。"
-        } else if let message = error.localizedDescription.nilIfEmpty {
-            playbackMessage = message
         } else {
-            playbackMessage = "暂时无法播放这首歌，请重试。"
+            playbackMessage = PlaybackFailure.message(error)
         }
         Self.logger.error("Playback failed: \(String(reflecting: error as NSError), privacy: .private)")
         updateLockScreen()

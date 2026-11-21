@@ -1,0 +1,24 @@
+# 阿噗音乐下载与播放修复（build 8）
+
+## 真实 API 取证
+
+数据来自 2026-11-21 对线上只读 API 的一次全新采样；每首均按 App 请求形状 POST `/api/v1/playbacks`，`quality=high`、`streaming_mode=null`、`include_cover=false`、`selected_id=搜索行 id`。逐曲结果见 `reports/search_download_report.csv`。
+
+- 共 30 首：tencent 21、netease 7、kugou 1、youtubemusic 1；该固定关键词样本没有 Apple Music 返回，未从别处补造。
+- 30/30 后端任务在首次状态观察时已经 `completed`；没有后端 failed、等待超时或 streaming 状态样本。因此 streaming 阶段字节数标记“首次观察已 completed，未观测”，不与完整文件字节混淆。
+- 30/30 音频请求完成，最终 200；30/30 实际落盘字节数等于 `Content-Length`，总计 474,415,794 字节（约 452.5 MiB）。30/30 有 302 跳转后到音频域名的记录。
+- 格式魔数：MP3 21、M4A/MP4 3、Ogg 3、FLAC 3。响应头 `Content-Type` 与魔数同时记录；签名查询参数不写入报告。
+- 先前探查中的大 FLAC 流在本轮一次传输中途断开；这证明连接中断可发生，不代表 30 首新样本中下载失败。真实 streaming 阶段对比及真实后端 failed 统计在本次样本中不可得。
+
+## 根因与修复
+
+- 搜索行须保持 `selected_id=item.id`、`source_id=item.source_id || item.id`；App 搜索解码现显式归一化这两个字段，避免把 source id 错作播放选择。
+- 旧下载路径先使用播放就绪标准，FLAC 还经过转码且不识别 Ogg；改为下载专用 resolver 必须等任务 `completed`，URLSession 后台 `downloadTask` 直接写临时文件，保留 FLAC/MP3/AAC/M4A/Ogg/WAV 原始字节。
+- 下载校验要求识别的容器魔数和非空文件；200 响应校验完整 `Content-Length`，206 按 `Content-Range` 的完整总长语义校验；无可信长度或长度不匹配则失败，不保存。
+- 后台下载重用固定 session identifier，资源超时 3600 秒、请求超时 120 秒；下载失败尝试 resume data 一次，iOS 重启后的完成事件以 task metadata 恢复并保存。并发连接限制为 2。
+- 播放 API 的网络错误/超时以原请求重试一次；后台明确 failed 一律转不可播并按队列规则跳过，既有连续失败上限保留。AVPlayerItem 失败写 `selected_id`、taskID、错误 domain/code 至 `ApuMusic.playback`，标识和任务 ID为私密日志字段。
+- 下载就绪阶段显示不确定进度与“准备中” spinner；下载失败使用通用中文文案，不显示音源或音质信息。
+
+## 边界与未验证
+
+没有改动线上 Worker、D1、后端或网站。按要求未运行测试、模拟器、截图、真机或云端测试。当前环境是 Windows，无法本地运行 Xcode；只能由 `ios-package-only` macOS 工作流做 Release 编译并出 unsigned IPA。后台 URLSession 下载恢复、真实断点续传、AVPlayer 播放重试及 UI 行为均待真机验收。

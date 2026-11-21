@@ -1,127 +1,231 @@
-import AVFoundation
 import Foundation
+import OSLog
 
+/// Downloads original bytes. Playback continues to use the backend's native URL.
 enum CompatibleAudio {
-    static func localFile(from source: URL, onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
-        let download = FileManager.default.temporaryDirectory.appendingPathComponent("apu-source-\(UUID().uuidString)")
-        let conversion = Task.detached(priority: .utility) {
-            defer { try? FileManager.default.removeItem(at: download) }
-            try await downloadAudio(source, to: download, onProgress: onProgress)
-            return try transcodeIfNeeded(download)
-        }
-        return try await withTaskCancellationHandler {
-            try await conversion.value
-        } onCancel: {
-            conversion.cancel()
-        }
+    static func localFile(from source: URL, track: Track? = nil,
+                          onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
+        try await BackgroundAudioDownload.shared.download(source, track: track, onProgress: onProgress)
     }
 
-    private static func downloadAudio(_ source: URL, to destination: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpMaximumConnectionsPerHost = 2
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        var offset: Int64 = 0
-        var expectedTotal: Int64?
-        guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
-            throw PlaybackError.unavailable("无法创建音频临时文件。")
+    static func validate(_ file: URL, response: HTTPURLResponse) throws -> String {
+        let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber
+        guard let count = size?.int64Value, count > 0 else {
+            throw PlaybackError.unavailable("音频文件为空，请重新下载。")
         }
-        let output = try FileHandle(forWritingTo: destination)
-        defer { try? output.close() }
-
-        while expectedTotal.map({ offset < $0 }) ?? true {
-            try Task.checkCancellation()
-            var request = URLRequest(url: source, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
-            request.setValue("bytes=\(offset)-\(offset + 1_048_575)", forHTTPHeaderField: "Range")
-            let (chunk, response) = try await session.data(for: request)
-            guard let response = response as? HTTPURLResponse,
-                  (200..<300).contains(response.statusCode), !chunk.isEmpty else {
-                throw PlaybackError.unavailable("音频服务器无法提供完整文件（HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)）。")
+        if response.statusCode == 206 {
+            // Only accept a whole-object range response; a truncated resumed
+            // response is not a complete download task result.
+            guard let header = response.value(forHTTPHeaderField: "Content-Range"),
+                  let range = parseContentRange(header), range.end + 1 == range.total,
+                  count == range.total else {
+                throw PlaybackError.unavailable("音频文件没有下载完整，请重新下载。")
             }
-            let rangeHeader = response.value(forHTTPHeaderField: "Content-Range")
-            guard response.statusCode == 206, let rangeHeader,
-                  let range = Self.parseContentRange(rangeHeader), range.start == offset,
-                  Int64(chunk.count) == range.end - range.start + 1,
-                  expectedTotal == nil || expectedTotal == range.total else {
-                throw PlaybackError.unavailable("音频服务器返回了不连续的数据块，无法完成兼容转换。")
+        } else if response.statusCode == 200 {
+            // Content-Length is comparable because the request asks for the
+            // identity representation.
+            if let encoding = response.value(forHTTPHeaderField: "Content-Encoding"),
+               encoding.lowercased() != "identity" {
+                throw PlaybackError.unavailable("音频服务器返回的文件长度无法校验，请稍后重试。")
             }
-            expectedTotal = range.total
-            try output.write(contentsOf: chunk)
-            offset += Int64(chunk.count)
-            if let expectedTotal { onProgress?(Double(offset) / Double(expectedTotal)) }
-        }
-        guard let expectedTotal, offset == expectedTotal else {
-            throw PlaybackError.unavailable("音频文件传输未完整结束。")
-        }
-    }
-
-    private struct ByteRange {
-        var start: Int64
-        var end: Int64
-        var total: Int64
-    }
-
-    private static func parseContentRange(_ header: String) -> ByteRange? {
-        guard let match = header.range(of: #"^bytes (\d+)-(\d+)/(\d+)$"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
-        let values = header[match].dropFirst("bytes ".count).split { $0 == "-" || $0 == "/" }
-        guard values.count == 3,
-              let start = Int64(values[0]), let end = Int64(values[1]), let total = Int64(values[2]),
-              start >= 0, end >= start, total > end else { return nil }
-        return ByteRange(start: start, end: end, total: total)
-    }
-
-    private static func transcodeIfNeeded(_ download: URL) throws -> URL {
-        try Task.checkCancellation()
-        let reader = try FileHandle(forReadingFrom: download)
-        defer { try? reader.close() }
-        let header = try reader.read(upToCount: 12) ?? Data()
-        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("apu-\(UUID().uuidString)")
-
-        if header.starts(with: "fLaC".utf8) {
-            let flac = temporary.appendingPathExtension("flac")
-            let m4a = temporary.appendingPathExtension("m4a")
-            try FileManager.default.moveItem(at: download, to: flac)
-            defer { try? FileManager.default.removeItem(at: flac) }
-            do {
-                try convertFLAC(flac, to: m4a)
-                return m4a
-            } catch {
-                try? FileManager.default.removeItem(at: m4a)
-                throw error
+            guard let header = response.value(forHTTPHeaderField: "Content-Length"),
+                  let expected = Int64(header), expected > 0 else {
+                throw PlaybackError.unavailable("音频服务器未提供完整文件大小，请稍后重试。")
             }
-        }
-
-        let fileExtension: String
-        if header.dropFirst(4).starts(with: "ftyp".utf8) {
-            fileExtension = "m4a"
-        } else if header.starts(with: "ID3".utf8) ||
-                    (header.count >= 2 && header[0] == 0xff && header[1] & 0xe0 == 0xe0) {
-            fileExtension = header.count >= 2 && header[0] == 0xff && header[1] & 0xf6 == 0xf0 ? "aac" : "mp3"
+            guard count == expected else {
+                throw PlaybackError.unavailable("音频文件没有下载完整，请重新下载。")
+            }
         } else {
-            throw PlaybackError.unavailable("音频格式不受支持。")
+            throw PlaybackError.unavailable("音频地址暂时无法下载，请稍后重试。")
         }
-        let output = temporary.appendingPathExtension(fileExtension)
-        try FileManager.default.moveItem(at: download, to: output)
-        return output
+        let reader = try FileHandle(forReadingFrom: file)
+        defer { try? reader.close() }
+        let header = try reader.read(upToCount: 16) ?? Data()
+        // Magic wins over MIME: some real upstreams serve audio as text/html.
+        if header.starts(with: "fLaC".utf8) { return "flac" }
+        if header.starts(with: "OggS".utf8) { return "ogg" }
+        if header.dropFirst(4).starts(with: "ftyp".utf8) { return "m4a" }
+        if header.starts(with: "RIFF".utf8), header.dropFirst(8).starts(with: "WAVE".utf8) { return "wav" }
+        if header.starts(with: "ID3".utf8) { return "mp3" }
+        if header.count >= 2, header[0] == 0xff, header[1] & 0xe0 == 0xe0 {
+            return header[1] & 0xf6 == 0xf0 ? "aac" : "mp3"
+        }
+        // Never accept an HTML/JSON error merely because a MIME claims audio.
+        throw PlaybackError.unavailable("服务器返回的文件不是可识别的音频，请稍后重试。")
     }
 
-    private static func convertFLAC(_ source: URL, to destination: URL) throws {
-        let input = try AVAudioFile(forReading: source, commonFormat: .pcmFormatInt16, interleaved: false)
-        let format = input.processingFormat
-        let output = try AVAudioFile(forWriting: destination, settings: [
-            AVFormatIDKey: kAudioFormatAppleLossless,
-            AVSampleRateKey: format.sampleRate,
-            AVNumberOfChannelsKey: format.channelCount,
-            AVEncoderBitDepthHintKey: 16
-        ], commonFormat: .pcmFormatInt16, interleaved: false)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_384) else {
-            throw PlaybackError.unavailable("无法初始化音频转换。")
+    private static func parseContentRange(_ header: String) -> (end: Int64, total: Int64)? {
+        guard header.range(of: #"^bytes \d+-\d+/\d+$"#, options: [.regularExpression, .caseInsensitive]) != nil else { return nil }
+        let parts = header.dropFirst(6).split { $0 == "-" || $0 == "/" }
+        guard parts.count == 3, let start = Int64(parts[0]), let end = Int64(parts[1]),
+              let total = Int64(parts[2]), start >= 0, end >= start, total > end else { return nil }
+        return (end, total)
+    }
+}
+
+/// The OS writes straight to a temporary file, including while suspended.
+/// All mutable job state and delegate callbacks run on one serial queue.
+final class BackgroundAudioDownload: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    static let shared = BackgroundAudioDownload()
+    static let sessionIdentifier = "fr.kdns.kenmusic.apu.original-downloads"
+    private static let logger = Logger(subsystem: "ApuMusic", category: "download")
+    private let queue = DispatchQueue(label: "ApuMusic.download")
+    private var jobs: [UUID: Job] = [:]
+    private var cancelledBeforeStart = Set<UUID>()
+    private var backgroundCompletion: (() -> Void)?
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
+        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.timeoutIntervalForRequest = 120
+        configuration.timeoutIntervalForResource = 3600
+        configuration.waitsForConnectivity = true
+        configuration.isDiscretionary = false
+        configuration.sessionSendsLaunchEvents = true
+        let delegateQueue = OperationQueue()
+        delegateQueue.maxConcurrentOperationCount = 1
+        delegateQueue.underlyingQueue = queue
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
+    }()
+
+    private struct Metadata: Codable {
+        var id: UUID
+        var track: Track?
+        var attempt: Int
+    }
+
+    private final class Job {
+        let continuation: CheckedContinuation<URL, Error>
+        let onProgress: (@Sendable (Double) -> Void)?
+        var task: URLSessionDownloadTask
+        var file: URL?
+        var fileError: Error?
+        init(_ continuation: CheckedContinuation<URL, Error>, progress: (@Sendable (Double) -> Void)?, task: URLSessionDownloadTask) {
+            self.continuation = continuation
+            self.onProgress = progress
+            self.task = task
         }
-        while input.framePosition < input.length {
-            try Task.checkCancellation()
-            try input.read(into: buffer)
-            guard buffer.frameLength > 0 else { break }
-            try output.write(from: buffer)
+    }
+
+    func reconnect(completion: (() -> Void)? = nil) {
+        queue.async {
+            self.backgroundCompletion = completion
+            self.session.getAllTasks { _ in }
         }
+    }
+
+    func download(_ source: URL, track: Track?, onProgress: (@Sendable (Double) -> Void)?) async throws -> URL {
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+                queue.async {
+                    if self.cancelledBeforeStart.remove(id) != nil {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    var request = URLRequest(url: source, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 120)
+                    request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+                    let task = self.session.downloadTask(with: request)
+                    self.setMetadata(Metadata(id: id, track: track, attempt: 0), on: task)
+                    self.jobs[id] = Job(continuation, progress: onProgress, task: task)
+                    task.resume()
+                }
+            }
+        } onCancel: {
+            self.queue.async {
+                guard let job = self.jobs.removeValue(forKey: id) else {
+                    self.cancelledBeforeStart.insert(id)
+                    return
+                }
+                job.task.cancel()
+                if let file = job.file { try? FileManager.default.removeItem(at: file) }
+                job.continuation.resume(throwing: CancellationError())
+            }
+        }
+    }
+
+    private func metadata(_ task: URLSessionTask) -> Metadata? {
+        guard let data = task.taskDescription?.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(Metadata.self, from: data)
+    }
+
+    private func setMetadata(_ value: Metadata, on task: URLSessionTask) {
+        task.taskDescription = (try? JSONEncoder().encode(value)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        guard let metadata = metadata(downloadTask), totalBytesExpectedToWrite > 0 else { return }
+        jobs[metadata.id]?.onProgress?(min(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite), 1))
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard let metadata = metadata(downloadTask) else { return }
+        do {
+            guard let response = downloadTask.response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            let ext = try CompatibleAudio.validate(location, response: response)
+            let saved = FileManager.default.temporaryDirectory.appendingPathComponent("apu-\(metadata.id).\(ext)")
+            try FileManager.default.moveItem(at: location, to: saved)
+            if let job = jobs[metadata.id] {
+                job.file = saved
+            } else if let track = metadata.track {
+                // Relaunched by iOS after a background transfer completed.
+                // Persist before acknowledging background session events.
+                do { try DownloadStore.add(track, file: saved) }
+                catch { Self.logger.error("恢复下载保存失败 code=\((error as NSError).code)") }
+                try? FileManager.default.removeItem(at: saved)
+            } else {
+                try? FileManager.default.removeItem(at: saved)
+            }
+        } catch {
+            jobs[metadata.id]?.fileError = error
+            Self.logger.error("下载校验失败 code=\((error as NSError).code)")
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard var metadata = metadata(task) else { return }
+        let job = jobs[metadata.id]
+        if job == nil, metadata.attempt == 0,
+           (error as NSError?)?.code != NSURLErrorCancelled,
+           let resumeData = (error as NSError?)?.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+            metadata.attempt = 1
+            let retry = session.downloadTask(withResumeData: resumeData)
+            setMetadata(metadata, on: retry)
+            retry.resume()
+            return
+        }
+        let failure = job?.fileError ?? error
+        if let failure, metadata.attempt == 0,
+           (failure as NSError).code != NSURLErrorCancelled,
+           let original = task.originalRequest {
+            metadata.attempt = 1
+            let resumeData = (failure as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
+            let retry: URLSessionDownloadTask
+            if let resumeData { retry = session.downloadTask(withResumeData: resumeData) }
+            else { retry = session.downloadTask(with: original) }
+            setMetadata(metadata, on: retry)
+            job?.fileError = nil
+            if let file = job?.file { try? FileManager.default.removeItem(at: file) }
+            job?.file = nil
+            job?.task = retry
+            retry.resume()
+            return
+        }
+        guard let job = jobs.removeValue(forKey: metadata.id) else { return }
+        if let failure {
+            if let file = job.file { try? FileManager.default.removeItem(at: file) }
+            job.continuation.resume(throwing: failure)
+        } else if let file = job.file {
+            job.continuation.resume(returning: file)
+        } else {
+            job.continuation.resume(throwing: PlaybackError.unavailable("音频文件没有保存成功，请重新下载。"))
+        }
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        let completion = backgroundCompletion
+        backgroundCompletion = nil
+        DispatchQueue.main.async { completion?() }
     }
 }
