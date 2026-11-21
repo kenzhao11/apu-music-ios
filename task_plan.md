@@ -34,7 +34,8 @@
 - 已合并并推送 main：b908a0e79a686754e27c002be01a499b15581144（[skip ci]，未启动旧 push 测试工作流）。
 - 旧仅打包 run：44887781118 已于 2026-11-21 17:04:46 北京时间 completed/failure，不能再当作正在打包。已读取失败日志：Player.swift:244 的 Logger.error 插值自动闭包访问 current 与 activePlaybackTaskID 缺少显式 self。
 - 本轮最小修复：仅对这两个实例属性补 self.；同文件其余 Logger 调用为局部变量/参数，无同类实例属性捕获。未改变下载、播放或重试行为，未运行测试。
-- 下一步：提交增量交固定审核开发复核；通过后合入 main，仅启动 ios-package-only。成功后下载桌面 IPA，核验字节大小、包内版本和构建 commit；若仍运行仅设置一次完成条件等待。
+- 本轮修复提交：db9e5dc；固定审核开发只读复核原文：「通过。`b908a0e..db9e5dc` 增量无阻塞问题，可合入 main。」本地已核对源码仅两个 self.、测试/工作流/版本对象无变化，git diff --check 通过。
+- 下一步：合入并推送 main，仅启动 ios-package-only。成功后下载桌面 IPA，核验字节大小、包内版本和构建 commit；若仍运行仅设置一次完成条件等待。
 
 ## 已确认的真实接口事实（2026-11-21）
 - `POST /api/v1/playbacks` 参数：`platform, query=歌名, selected_id=行id, quality=high, streaming_mode=null, include_cover=false`；403 为偶发，需退避重试。
