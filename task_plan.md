@@ -25,12 +25,13 @@
 - [x] 阶段 2：修复 CompatibleAudio / DownloadManager / PlaybackResolver / Player；审核意见四项已完成代码修正，待复审
 - [x] 阶段 3：DONE.md 汇总真实失败统计与修法（含本轮审核修正与未验证边界）
 - [ ] 阶段 4：审核通过后合并 main；仅运行 ios-package-only 打包，校验 IPA 并放桌面
-- [x] 阶段 5：初审四项阻塞已在 de3a811 修正；复审新增临时音频遗留，恢复分支已改 defer 清理，待再次复审
+- [x] 阶段 5：初审四项阻塞已在 de3a811 修正；复审临时音频遗留已在 fe4c67e 修正，审核开发静态复审通过，无新增阻塞项
 
 ## 当前续接状态
 - 分支：fix/music-download-build8；保持 build8。
 - 仅修恢复下载的临时文件生命周期，未触碰另一开发分支及未跟踪探查文件。
-- 下一步：提交本次修正并送固定审核；通过后合并 main，仅编译打包。
+- 审核结论：fe4c67e 已通过固定审核开发只读复审。
+- 下一步：以 [skip ci] 文档提交合并 main（避免旧 push 测试工作流），手动运行 ios-package-only；下载 IPA 到桌面并检查包内版本。
 
 ## 已确认的真实接口事实（2026-11-21）
 - `POST /api/v1/playbacks` 参数：`platform, query=歌名, selected_id=行id, quality=high, streaming_mode=null, include_cover=false`；403 为偶发，需退避重试。
