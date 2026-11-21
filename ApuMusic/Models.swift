@@ -811,6 +811,9 @@ struct DownloadedTrack: Codable, Identifiable {
 
 enum DownloadStore {
     private static let key = "apu.downloaded.tracks"
+    private static let lock = NSLock()
+    private static let failureKey = "apu.download.failures"
+    static let failureNotification = Notification.Name("ApuMusic.downloadFailure")
     private static var records: [DownloadedTrack] {
         get {
             guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
@@ -818,7 +821,11 @@ enum DownloadStore {
         }
         set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: key) }
     }
-    static var tracks: [DownloadedTrack] { records.filter { FileManager.default.fileExists(atPath: fileURL($0).path) } }
+    static var tracks: [DownloadedTrack] {
+        lock.lock()
+        defer { lock.unlock() }
+        return records.filter { FileManager.default.fileExists(atPath: fileURL($0).path) }
+    }
     static func fileURL(_ item: DownloadedTrack) -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(item.filename)
     }
@@ -827,14 +834,39 @@ enum DownloadStore {
         return fileURL(item)
     }
     static func add(_ track: Track, file: URL) throws {
+        lock.lock()
+        defer { lock.unlock() }
         let destination = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("\(UUID().uuidString).\(file.pathExtension)")
         try FileManager.default.copyItem(at: file, to: destination)
-        records.removeAll { $0.track.id == track.id }
-        records.insert(DownloadedTrack(track: track, filename: destination.lastPathComponent), at: 0)
+        var updated = records
+        let replaced = updated.filter { $0.track.id == track.id }
+        updated.removeAll { $0.track.id == track.id }
+        updated.insert(DownloadedTrack(track: track, filename: destination.lastPathComponent), at: 0)
+        records = updated
+        for item in replaced { try? FileManager.default.removeItem(at: fileURL(item)) }
     }
     static func remove(_ item: DownloadedTrack) {
+        lock.lock()
+        defer { lock.unlock() }
         try? FileManager.default.removeItem(at: fileURL(item))
-        records.removeAll { $0.id == item.id }
+        records.removeAll { $0.filename == item.filename }
+    }
+
+    static func recordFailure(for track: Track, message: String) {
+        lock.lock()
+        var failures = UserDefaults.standard.dictionary(forKey: failureKey) as? [String: String] ?? [:]
+        failures[track.id] = message
+        UserDefaults.standard.set(failures, forKey: failureKey)
+        lock.unlock()
+        NotificationCenter.default.post(name: failureNotification, object: nil)
+    }
+
+    static func consumeFailures() -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        let failures = UserDefaults.standard.dictionary(forKey: failureKey) as? [String: String] ?? [:]
+        UserDefaults.standard.removeObject(forKey: failureKey)
+        return failures
     }
 }

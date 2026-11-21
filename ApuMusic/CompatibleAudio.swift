@@ -91,6 +91,7 @@ final class BackgroundAudioDownload: NSObject, URLSessionDownloadDelegate, @unch
         var id: UUID
         var track: Track?
         var attempt: Int
+        var validationFailure: String? = nil
     }
 
     private final class Job {
@@ -160,7 +161,7 @@ final class BackgroundAudioDownload: NSObject, URLSessionDownloadDelegate, @unch
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let metadata = metadata(downloadTask) else { return }
+        guard var metadata = metadata(downloadTask) else { return }
         do {
             guard let response = downloadTask.response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
             let ext = try CompatibleAudio.validate(location, response: response)
@@ -172,13 +173,20 @@ final class BackgroundAudioDownload: NSObject, URLSessionDownloadDelegate, @unch
                 // Relaunched by iOS after a background transfer completed.
                 // Persist before acknowledging background session events.
                 do { try DownloadStore.add(track, file: saved) }
-                catch { Self.logger.error("恢复下载保存失败 code=\((error as NSError).code)") }
-                try? FileManager.default.removeItem(at: saved)
+                catch {
+                    try? FileManager.default.removeItem(at: saved)
+                    throw error
+                }
             } else {
                 try? FileManager.default.removeItem(at: saved)
             }
         } catch {
-            jobs[metadata.id]?.fileError = error
+            if let job = jobs[metadata.id] {
+                job.fileError = error
+            } else {
+                metadata.validationFailure = PlaybackFailure.message(error)
+                setMetadata(metadata, on: downloadTask)
+            }
             Self.logger.error("下载校验失败 code=\((error as NSError).code)")
         }
     }
@@ -195,7 +203,25 @@ final class BackgroundAudioDownload: NSObject, URLSessionDownloadDelegate, @unch
             retry.resume()
             return
         }
-        let failure = job?.fileError ?? error
+        let failure = job?.fileError ?? error ?? metadata.validationFailure.map { PlaybackError.unavailable($0) }
+        if job == nil, let failure {
+            if metadata.attempt == 0, (failure as NSError).code != NSURLErrorCancelled,
+               let original = task.originalRequest {
+                metadata.attempt = 1
+                metadata.validationFailure = nil
+                let resumeData = (failure as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
+                let retry: URLSessionDownloadTask
+                if let resumeData { retry = session.downloadTask(withResumeData: resumeData) }
+                else { retry = session.downloadTask(with: original) }
+                setMetadata(metadata, on: retry)
+                retry.resume()
+                return
+            }
+            if let track = metadata.track {
+                DownloadStore.recordFailure(for: track, message: PlaybackFailure.message(failure))
+            }
+            return
+        }
         if let failure, metadata.attempt == 0,
            (failure as NSError).code != NSURLErrorCancelled,
            let original = task.originalRequest {

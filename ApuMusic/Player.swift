@@ -243,7 +243,8 @@ final class Player: ObservableObject {
         let errorCode = (failure as NSError).code
         Self.logger.error("AVPlayerItem failed selected_id=\((current?.playbackSelectionID ?? ""), privacy: .private) taskID=\(activePlaybackTaskID, privacy: .private) domain=\((failure as NSError).domain, privacy: .public) code=\(errorCode)")
         clearEngine()
-        if PlaybackFailure.isNetwork(failure), networkPlaybackRetries == 0,
+        let startupTimedOut = (failure as? PlaybackError)?.localizedDescription.contains("超时") == true
+        if (PlaybackFailure.isNetwork(failure) || startupTimedOut), networkPlaybackRetries == 0,
            let current, current.canPlay {
             networkPlaybackRetries += 1
             playbackMessage = "网络连接不稳定，正在重试…"

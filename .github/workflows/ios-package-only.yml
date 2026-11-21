@@ -22,7 +22,8 @@ jobs:
 
       - name: Verify package-only workflow has no test actions
         run: |
-          ! grep -Eq 'xcodebuild .*test|xcodebuild test|simctl|xcresulttool' .github/workflows/ios-package-only.yml
+          # Exclude this guard's own pattern from the commands being inspected.
+          ! grep -v 'grep' .github/workflows/ios-package-only.yml | grep -Eq 'xcodebuild .*test|xcodebuild test|simctl|xcresulttool'
 
       - name: Build Release for device
         run: |

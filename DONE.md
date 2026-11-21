@@ -19,6 +19,14 @@
 - 播放 API 的网络错误/超时以原请求重试一次；后台明确 failed 一律转不可播并按队列规则跳过，既有连续失败上限保留。AVPlayerItem 失败写 `selected_id`、taskID、错误 domain/code 至 `ApuMusic.playback`，标识和任务 ID为私密日志字段。
 - 下载就绪阶段显示不确定进度与“准备中” spinner；下载失败使用通用中文文案，不显示音源或音质信息。
 
+## 初审问题修正（复审待定）
+
+- 修复 package-only workflow 自身 grep 扫描命中；规则只检查 workflow 中的命令内容。
+- `DownloadStore` 对 records 的读写加串行锁，并清理同一曲目替换后的旧文件，防止后台保存与主线程保存/删除覆盖记录。
+- iOS 恢复的后台任务遇到校验/保存失败会最多重试一次；最终失败写入持久化队列，由下载管理器恢复后显示通用错误提示。
+- 播放启动 30 秒超时与其他网络失败一样，使用相同选曲重试一次。
+- 上述为代码静态修正，未执行构建、测试或真机验证。
+
 ## 边界与未验证
 
 没有改动线上 Worker、D1、后端或网站。按要求未运行测试、模拟器、截图、真机或云端测试。当前环境是 Windows，无法本地运行 Xcode；只能由 `ios-package-only` macOS 工作流做 Release 编译并出 unsigned IPA。后台 URLSession 下载恢复、真实断点续传、AVPlayer 播放重试及 UI 行为均待真机验收。

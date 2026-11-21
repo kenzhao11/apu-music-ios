@@ -8,6 +8,27 @@ final class DownloadManager: ObservableObject {
     @Published private(set) var errors: [String: String] = [:]
     @Published var alertMessage: String?
     private var tasks: [String: Task<Void, Never>] = [:]
+    private var failureObserver: NSObjectProtocol?
+
+    init() {
+        failureObserver = NotificationCenter.default.addObserver(
+            forName: DownloadStore.failureNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.consumeRestoredFailures() }
+        }
+        consumeRestoredFailures()
+    }
+
+    deinit {
+        if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
+    }
+
+    private func consumeRestoredFailures() {
+        for (trackID, message) in DownloadStore.consumeFailures() {
+            errors[trackID] = message
+            alertMessage = "下载失败：\(message)"
+        }
+    }
 
     func download(_ track: Track) {
         guard tasks[track.id] == nil else { return }
