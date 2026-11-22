@@ -29,12 +29,17 @@
 - 审核开发对 `de3a811..fe4c67e` 的结论原文：「通过。问题清单：无新增阻塞项。」确认恢复分支 defer 覆盖成功与失败，Documents 副本不受清理影响，普通下载路径未改变；未删改测试。
 - 上述为代码静态修正，未执行测试或真机验证。审核通过后合并 main，仅启动 `ios-package-only.yml`；推送提交使用 `[skip ci]`，避免旧 push 工作流自动运行模拟器测试。构建和包校验结果另记交付记录。
 
-## build8 编译修正（增量审核通过，待新打包）
+## build8 编译修正与安装包交付（已完成）
 
 - 原仅打包 run `44887781118` 于 2026-11-21 17:04:46 北京时间结束为 failure，不是仍在执行。失败日志指向 `Player.swift:244:63` 与 `:128`：Logger.error 的插值自动闭包引用实例属性须明确写 `self`。
 - 最小修复仅将 `current`、`activePlaybackTaskID` 改为 `self.current`、`self.activePlaybackTaskID`；保留日志隐私级别及下载/播放行为。其余同文件 Logger 调用未发现同类实例属性捕获。
 - 修复提交 `db9e5dc`。固定审核开发结论原文：「通过。`b908a0e..db9e5dc` 增量无阻塞问题，可合入 main。」本地复核源码差异仅两个 self.，测试、工作流、project.yml 两端无差异，git diff --check 通过。
-- 尚未宣称编译通过或 IPA 交付；接下来合入 main，仅跑 package-only，成功下载并验证后补齐证据。按要求不新增/运行测试、模拟器或真机操作。
+- 已合入并推送 main：420e5bb3e7ba02ee60b06d835185bfb434a27f1d，含修复 db9e5dc。package-only run 44891936200 已 completed/success，于 2026-11-21 17:57:24 北京时间完成；本轮核对 run 与 artifact 的 headSha 均精确匹配该提交，未重新构建。
+- 2026-11-21 18:04 北京时间完成桌面交付：`C:/Users/kenzh/Desktop/ApuMusic-0.1.0-build8-unsigned.ipa`，实际大小 **2,815,445 字节**，包内 `CFBundleShortVersionString=0.1.0`、`CFBundleVersion=8`、`CFBundleIdentifier=fr.kdns.kenmusic.apu`，ZIP 完整性通过。目标原先不存在，未覆盖任何旧包。
+- IPA SHA256：`afaf32774af1fe73d37d7cca688d43bbba2cae8bacb5b3fb320cd2338f2424da`。桌面副本与成功 run 提取的 IPA 大小、SHA256 和包内版本一致。
+- 来源 artifact：`14702596685` / `ApuMusic-0.1.0-build8-unsigned-package-only`；下载归档 2,810,859 字节，SHA256=`b6bbf3cf4badc82f0bc1aee22c421e8d9b3ab96d37f0a38f25d47bea6dc74690`，与 GitHub artifact digest 一致。
+- 机器可读证据：`C:/Users/kenzh/.openmausbot/task-workspaces/aa861c3b-a7cc-430a-bf1c-38249cd022bd/8f7e3f9a-cb17-453a-b958-f7d00ef6bf94/build8-delivery/delivery-evidence.json`。逐曲 CSV：`D:/Projects/apu-music-ios/reports/search_download_report.csv`。
+- 已读回确认本对话没有未结束等待、本 bot 没有自动化，无需取消临时监控。本轮只下载、核验并更新交付记录；未改业务代码，未新增/运行测试、模拟器、截图或手机操作。新包须 Ken 安装确认后再安排真机验收。
 
 ## 边界与未验证
 
