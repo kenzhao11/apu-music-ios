@@ -7,7 +7,7 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "8"
+    CURRENT_PROJECT_VERSION: "9"
 targets:
   ApuMusic:
     type: application
@@ -21,7 +21,7 @@ targets:
         # the template's $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION) alone
         # shipped as 1.0/1, so write the real build into the generated plist.
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "8"
+        CFBundleVersion: "9"
         LSRequiresIPhoneOS: true
         UIBackgroundModes:
           - audio
@@ -45,7 +45,7 @@ targets:
         # settings replace the project-level ones, so $(...)-values in
         # Info.plist would otherwise expand to Xcode's 1.0 / 1 default.
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "8"
+        CURRENT_PROJECT_VERSION: "9"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
