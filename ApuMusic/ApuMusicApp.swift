@@ -991,7 +991,7 @@ struct TrackRow: View {
         .padding(.horizontal, 5)
         .frame(height: 64)
         .opacity(unavailable ? 0.45 : 1)
-        .foregroundStyle(unavailable ? .secondary : .white)
+        .foregroundStyle(unavailable ? Color.secondary : Color.white)
     }
     private func addFavorite() {
         favorites.toggle(track)
