@@ -8,6 +8,10 @@ final class ArtworkCache {
     private let memory = NSCache<NSString, UIImage>()
     private let session: URLSession
     private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private var imageMisses: [String: Date] = [:]
+    private var detailCoverURLs: [String: URL] = [:]
+    private var detailCoverMisses: [String: Date] = [:]
+    private var detailCoverTasks: [String: Task<URL?, Never>] = [:]
 
     private init() {
         memory.totalCostLimit = 32 * 1024 * 1024
@@ -21,10 +25,44 @@ final class ArtworkCache {
         session = URLSession(configuration: configuration)
     }
 
+    func artworkURL(for track: Track, tier: String, forceDetailLookup: Bool = false) async -> URL? {
+        if !forceDetailLookup, let url = track.artworkURL(tier: tier) { return url }
+        let key = "\(track.platform):\(track.id)"
+        if let cached = detailCoverURLs[key] { return trackURL(cached, tier: tier) }
+        if let missedAt = detailCoverMisses[key], Date().timeIntervalSince(missedAt) < 300 { return nil }
+        detailCoverMisses[key] = nil
+        if let pending = detailCoverTasks[key] { let found = await pending.value; return found.flatMap { trackURL($0, tier: tier) } }
+        let task = Task<URL?, Never> {
+            do {
+                let detail = try await MusicAPI.trackDetail(platform: track.platform, id: track.id)
+                return detail.artwork
+            } catch { return nil }
+        }
+        detailCoverTasks[key] = task
+        let found = await task.value
+        detailCoverTasks[key] = nil
+        if let found { detailCoverURLs[key] = found; if detailCoverURLs.count > 1000 { detailCoverURLs.removeAll(keepingCapacity: true) }; return trackURL(found, tier: tier) }
+        detailCoverMisses[key] = Date(); if detailCoverMisses.count > 1000 { detailCoverMisses = detailCoverMisses.filter { Date().timeIntervalSince($0.value) < 300 } }
+        return nil
+    }
+
+    private func trackURL(_ url: URL, tier: String) -> URL? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        return Track(id: "art", platform: "", song: "", singer: "", cover: components.url?.absoluteString).artworkURL(tier: tier)
+    }
+
+    func cachedImage(for url: URL, pixelSize: Int) -> UIImage? {
+        let bucket = pixelSize >= 500 ? 640 : (pixelSize >= 200 ? 300 : 64)
+        return memory.object(forKey: "\(bucket):\(pixelSize):\(url.absoluteString)" as NSString)
+    }
+
     func image(for url: URL, pixelSize: Int) async -> UIImage? {
         guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return nil }
-        let key = "\(pixelSize):\(url.absoluteString)"
+        let bucket = pixelSize >= 500 ? 640 : (pixelSize >= 200 ? 300 : 64)
+        let key = "\(bucket):\(pixelSize):\(url.absoluteString)"
         if let cached = memory.object(forKey: key as NSString) { return cached }
+        if let missedAt = imageMisses[key], Date().timeIntervalSince(missedAt) < 300 { return nil }
+        imageMisses[key] = nil
         if let pending = inFlight[key] { return await pending.value }
 
         let pending = Task.detached(priority: .utility) { [session] () -> UIImage? in
@@ -44,6 +82,9 @@ final class ArtworkCache {
         inFlight[key] = nil
         if let image, let bitmap = image.cgImage {
             memory.setObject(image, forKey: key as NSString, cost: bitmap.bytesPerRow * bitmap.height)
+        } else {
+            imageMisses[key] = Date()
+            if imageMisses.count > 1000 { imageMisses = imageMisses.filter { Date().timeIntervalSince($0.value) < 300 } }
         }
         return image
     }

@@ -44,9 +44,6 @@ enum PlaybackResolver {
     private static let logger = Logger(subsystem: "ApuMusic", category: "playback")
 
     static func prepare(track: Track, quality: PlaybackQuality = .siteQuality, forDownload: Bool = false) async throws -> PreparedPlayback {
-        guard track.canPlay else {
-            throw PlaybackError.unplayable("这首歌暂时无法播放。")
-        }
         let target = PlaybackTarget(track: track, quality: quality)
         let created = try await MusicAPI.createPlayback(target.request).task
         let ready = try await waitUntilReady(created, forDownload: forDownload)
@@ -68,11 +65,9 @@ enum PlaybackResolver {
         let deadline = ContinuousClock.now + .seconds(240)
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()
-            if task.status == "failed" {
-                // Every explicit backend failure is final, regardless of its
-                // internal error_code. Never expose provider details to users.
-                throw PlaybackError.unplayable("这首歌暂时无法播放。")
-            }
+            if task.isRetryableFailure { throw PlaybackError.unavailable("当前音源暂时未响应") }
+            if task.isDefinitivelyUnplayable { throw PlaybackError.unplayable("这首歌暂时无法播放。") }
+            if task.status == "failed" { throw PlaybackError.unavailable("无法播放当前歌曲") }
             if forDownload ? task.status == "completed" : task.isReadyForNativePlayback { return task }
             let next = try await MusicAPI.playbackStatus(id: task.id, since: task.status).task
             if next.status == task.status { try await Task.sleep(for: .milliseconds(350)) }

@@ -49,7 +49,7 @@ struct MusicShell: View {
             if let current = player.current {
                 Button { playerPresented = true } label: {
                     HStack(spacing: 11) {
-                        Artwork(url: current.artwork, size: 42, thumbnailURL: current.thumbnail)
+                        Artwork(url: current.artworkURL(tier: "medium"), fallbackURL: current.artworkURL(tier: "small"), size: 42, track: current)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(current.song).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                             Text(player.playbackFailed ? player.playbackMessage : current.singer)
@@ -94,6 +94,14 @@ struct MusicShell: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
+        .overlay(alignment: .bottom) {
+            if !player.availabilityNotice.isEmpty {
+                Text(player.availabilityNotice).font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white).padding(.horizontal, 20).padding(.vertical, 12)
+                    .background(Color(white: 0.12)).clipShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(.bottom, 66).allowsHitTesting(false)
+            }
+        }
         .sheet(isPresented: $playerPresented) {
             NowPlayingScreen().environmentObject(player).accessibilityIdentifier("正在播放")
                 .presentationDetents([.large])
@@ -169,7 +177,7 @@ struct HomeScreen: View {
                                 ForEach(tracks) { track in
                                     Button { player.setQueue(tracks, start: track); openPlayer() } label: {
                                         VStack(alignment: .leading, spacing: 8) {
-                                            Artwork(url: track.artwork, size: 158, thumbnailURL: track.thumbnail)
+                                            Artwork(url: track.artworkURL(tier: "medium"), fallbackURL: track.artworkURL(tier: "small"), size: 158, track: track)
                                             Text(track.song).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                                             Text(track.singer).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                                         }
@@ -314,7 +322,7 @@ struct SearchScreen: View {
                             } else {
                                 ForEach(Array(group.tracks.enumerated()), id: \.element.id) { index, track in
                                     TrackRow(track: track, index: index + 1, active: !track.canPlay) {
-                                        guard track.canPlay else { return }
+                                        guard track.canPlay else { player.markUnavailable(track); return }
                                         player.setQueue(tracks, start: track)
                                         openPlayer()
                                     }
@@ -465,7 +473,7 @@ struct PlaylistScreen: View {
                     }.padding(.top, 14)
                     ForEach(Array(detail.items.enumerated()), id: \.element.id) { index, track in
                         TrackRow(track: track, index: index + 1, active: !track.canPlay) {
-                            guard track.canPlay else { return }
+                            guard track.canPlay else { player.markUnavailable(track); return }
                             player.setQueue(detail.items, start: track); openPlayer()
                         }
                     }
@@ -491,7 +499,7 @@ struct LocalPlaylistScreen: View {
         List {
             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                 TrackRow(track: track, index: index + 1, active: !track.canPlay) {
-                    guard track.canPlay else { return }; player.setQueue(tracks, start: track); openPlayer()
+                    guard track.canPlay else { player.markUnavailable(track); return }; player.setQueue(tracks, start: track); openPlayer()
                 }.listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
             }
             .onDelete { indexes in
@@ -515,7 +523,7 @@ struct FavoriteScreen: View {
         List {
             ForEach(Array(favorites.tracks.enumerated()), id: \.element.id) { index, track in
                 TrackRow(track: track, index: index + 1, active: !track.canPlay) {
-                    guard track.canPlay else { return }
+                    guard track.canPlay else { player.markUnavailable(track); return }
                     player.setQueue(favorites.tracks, start: track)
                     openPlayer()
                 }
@@ -578,7 +586,7 @@ struct NowPlayingScreen: View {
             ScrollView {
                 VStack(spacing: 22) {
                     ZStack {
-                        Artwork(url: player.current?.artwork, size: coverSize)
+                        Artwork(url: player.current?.artworkURL(tier: "large"), fallbackURL: player.current?.artworkURL(tier: "medium"), size: coverSize, track: player.current)
                             .id(player.current?.id ?? "")
                             .offset(y: coverOffset)
                             .opacity(coverOpacity)
@@ -930,11 +938,15 @@ struct TrackRow: View {
     var action: () -> Void
     @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var favorites: FavoriteLibrary
+    @EnvironmentObject private var player: Player
+    private var unavailable: Bool { !track.canPlay || player.isUnavailable(track) }
     var body: some View {
         HStack(spacing: 8) {
-            Button(action: action) {
+            Button {
+                if unavailable { player.markUnavailable(track) } else { action() }
+            } label: {
                 HStack(spacing: 11) {
-                Artwork(url: track.artwork, size: 42, thumbnailURL: track.thumbnail)
+                Artwork(url: track.artworkURL(tier: "medium"), fallbackURL: track.artworkURL(tier: "small"), size: 42, track: track)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(track.song).font(.system(size: 14, weight: .medium)).lineLimit(1)
                     Text(track.singer).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
@@ -946,7 +958,6 @@ struct TrackRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!track.canPlay)
             .accessibilityIdentifier("歌曲-\(track.song)")
             if let seconds = track.duration, seconds > 0 {
                 Text("\(Int(seconds) / 60):\(String(format: "%02d", Int(seconds) % 60))")
@@ -966,7 +977,7 @@ struct TrackRow: View {
             }
             .frame(width: 30, height: 44)
             .buttonStyle(.plain)
-            .disabled(!track.canPlay || DownloadStore.localURL(for: track) != nil)
+            .disabled(unavailable || DownloadStore.localURL(for: track) != nil)
             .accessibilityLabel("下载\(track.song)")
             Menu {
                 Button { addFavorite() } label: { Label(favorites.contains(track) ? "从喜欢的歌曲移除" : "加入喜欢的歌曲", systemImage: "heart") }
@@ -979,7 +990,8 @@ struct TrackRow: View {
         }
         .padding(.horizontal, 5)
         .frame(height: 64)
-        .foregroundStyle(track.canPlay ? .white : .secondary)
+        .opacity(unavailable ? 0.45 : 1)
+        .foregroundStyle(unavailable ? .secondary : .white)
     }
     private func addFavorite() {
         favorites.toggle(track)
@@ -995,7 +1007,7 @@ struct FeaturedTrack: View {
     var track: Track
     var body: some View {
         HStack(spacing: 10) {
-            Artwork(url: track.artwork, size: 58, thumbnailURL: track.thumbnail)
+            Artwork(url: track.artworkURL(tier: "medium"), fallbackURL: track.artworkURL(tier: "small"), size: 58, track: track)
             VStack(alignment: .leading, spacing: 5) {
                 Text(track.song).font(.system(size: 13, weight: .semibold)).lineLimit(2)
                 Text(track.singer).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
@@ -1013,30 +1025,57 @@ struct FeaturedTrack: View {
 struct Artwork: View {
     var url: URL?
     var size: CGFloat
-    var thumbnailURL: URL? = nil
+    var fallbackURL: URL? = nil
+    var track: Track? = nil
     @State private var image: UIImage?
+    @State private var fallbackImage: UIImage?
+
+    init(url: URL?, fallbackURL: URL? = nil, size: CGFloat, track: Track? = nil) {
+        self.url = url
+        self.fallbackURL = fallbackURL
+        self.size = size
+        self.track = track
+    }
 
     var body: some View {
         Group {
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
+            } else if let fallbackImage {
+                Image(uiImage: fallbackImage).resizable().scaledToFill()
             } else {
                 ZStack {
                     Color(white: 0.09)
-                    Image(systemName: "waveform")
-                        .font(.system(size: size * 0.32))
-                        .foregroundStyle(ApuTheme.accent)
+                    Image(systemName: "music.note")
+                        .font(.system(size: size * 0.32, weight: .light))
+                        .foregroundStyle(Color.gray.opacity(0.82))
                 }
             }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 7))
-        .task(id: url) {
+        .task(id: "\(track?.platform ?? ""):\(track?.id ?? ""):\(url?.absoluteString ?? ""):\(size)") {
             image = nil
-            guard let url else { return }
-            let thumbnail = await ArtworkCache.shared.image(for: thumbnailURL ?? url,
-                                                              pixelSize: Int((size * UIScreen.main.scale).rounded()))
-            if !Task.isCancelled { image = thumbnail }
+            fallbackImage = nil
+            let pixels = Int((size * UIScreen.main.scale).rounded())
+            if let fallbackURL {
+                fallbackImage = ArtworkCache.shared.cachedImage(for: fallbackURL, pixelSize: pixels)
+                    ?? ArtworkCache.shared.cachedImage(for: fallbackURL, pixelSize: 126)
+            }
+            var primaryURL = url
+            if primaryURL == nil, let track { primaryURL = await ArtworkCache.shared.artworkURL(for: track, tier: size >= 240 ? "large" : "medium") }
+            guard !Task.isCancelled, let primaryURL else { return }
+            var fetched = await ArtworkCache.shared.image(for: primaryURL, pixelSize: pixels)
+            guard !Task.isCancelled else { return }
+            if fetched == nil, let original = track?.artwork, original != primaryURL {
+                fetched = await ArtworkCache.shared.image(for: original, pixelSize: pixels)
+            }
+            guard !Task.isCancelled else { return }
+            if fetched == nil, let fallbackURL, fallbackURL != primaryURL {
+                fetched = await ArtworkCache.shared.image(for: fallbackURL, pixelSize: pixels)
+            }
+            guard !Task.isCancelled else { return }
+            image = fetched
         }
     }
 }
@@ -1049,9 +1088,9 @@ struct PlaylistArtwork: View {
     var body: some View {
         Group {
             if let url {
-                Artwork(url: url, size: size, thumbnailURL: url)
-            } else if let firstCover = tracks.first(where: { $0.artwork != nil })?.artwork {
-                Artwork(url: firstCover, size: size, thumbnailURL: tracks.first(where: { $0.artwork != nil })?.thumbnail)
+                Artwork(url: Track.artworkURL(url.absoluteString, tier: "large"), fallbackURL: url, size: size)
+            } else if let firstCover = tracks.first(where: { $0.artwork != nil })?.artworkURL(tier: "medium") {
+                Artwork(url: firstCover, fallbackURL: tracks.first(where: { $0.artwork != nil })?.artworkURL(tier: "small"), size: size)
             } else {
                 VStack(spacing: 6) {
                     Image(systemName: "music.note.list").font(.system(size: size * 0.23, weight: .light))

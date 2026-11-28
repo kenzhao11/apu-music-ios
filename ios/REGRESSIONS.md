@@ -24,3 +24,4 @@
 | IOS-018 | build8 Release 编译失败 | 运行 ios-package-only 的 Build Release for device | Player.swift:244 的 Logger.error 插值自动闭包访问 current、activePlaybackTaskID 缺少显式 self | 原 run 44887781118 编译器报错；仅补 self，不改播放/下载行为；按要求不跑测试，待新 package-only 验证 | 0.1.0 (8) |
 | IOS-017 | 系统恢复下载成功后遗留整份临时音频 | 下载中结束 App，等待 iOS 恢复后台下载并保存 | DownloadStore.add 复制临时文件到 Documents，恢复分支只在失败时清理临时文件 | 静态路径核查：恢复分支 defer 在成功及失败时均清理临时文件；依 Ken 要求不跑测试，待真机 | 0.1.0 (8) |
 | IOS-016 | 打包检查自我命中、并发下载可能丢失记录、后台恢复校验失败不重试、启动超时不重试 | 静态检查打包 workflow；并行下载与普通保存/删除；在后台下载完成前结束进程并制造校验错误；启动播放器后不返回数据 | workflow grep 把检查命令本身当违规命令；DownloadStore records 读改写未串行；恢复任务校验错误没有 job 时被丢弃且完成回调无重试；启动超时包装成 unavailable 未纳入网络重试条件 | 静态 diff 与流程检查；依 Ken 要求不跑测试/模拟器，后台恢复及播放器行为待真机 | 0.1.0 (8) |
+| IOS-019 | 播放时发现确定不可播后，搜索列表仍显示可播且可再次请求 | 在列表点播一首后端明确标为不可播的歌，返回搜索结果查看该行 | 不可播状态只留在播放队列副本，没有跨视图共享 | Swift 固定审核逐行检查；未编译/XCTest，待 build9 真机验收 | build9（未打包） |

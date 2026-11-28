@@ -43,6 +43,9 @@ final class Player: ObservableObject {
     }
     @Published private(set) var playbackMessage = ""
     @Published private(set) var playbackFailed = false
+    @Published private(set) var availabilityNotice = ""
+    @Published private(set) var unavailableTrackIDs = Set<String>()
+    private var noticeTask: Task<Void, Never>?
     @Published var repeatMode = 0
     @Published var shuffled = false
     let progress = PlaybackProgress()
@@ -86,6 +89,21 @@ final class Player: ObservableObject {
         }
     }
 
+    func isUnavailable(_ track: Track) -> Bool {
+        unavailableTrackIDs.contains(track.id)
+    }
+
+    func markUnavailable(_ track: Track) {
+        // A disabled row must not interrupt the song already playing or open a sheet.
+        availabilityNotice = "此歌曲暂不可用"
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.availabilityNotice = ""
+        }
+    }
+
     func setQueue(_ tracks: [Track], start: Track) {
         playbackQueue = PlaybackQueue(tracks: tracks, startingAt: start)
         queue = playbackQueue.tracks
@@ -95,20 +113,7 @@ final class Player: ObservableObject {
 
     private func prepareCurrent() {
         guard queue.indices.contains(currentIndex) else { return }
-        var track = queue[currentIndex]
-        // The queue already drops rows nobody can play; this is the last guard
-        // before a request is posted.
-        if !track.canPlay, playbackQueue.advance() != nil {
-            queue = playbackQueue.tracks
-            currentIndex = playbackQueue.index
-            track = queue[currentIndex]
-        }
-        guard track.canPlay else {
-            wantsPlayback = false
-            playbackFailed = true
-            playbackMessage = "这首歌暂时无法播放。"
-            return
-        }
+        let track = queue[currentIndex]
         preparation?.cancel()
         prefetchTask?.cancel()
         prefetchTrackID = nil
@@ -153,7 +158,7 @@ final class Player: ObservableObject {
                     prefetched = nil
                     prepared = cached.playback
                 } else {
-                    prepared = try await PlaybackResolver.prepare(track: track)
+                    prepared = try await Self.prepareWithBoundedRetries(track)
                 }
                 guard !Task.isCancelled, self.selection == selected else { return }
                 self.activePlaybackTaskID = prepared.task.id
@@ -164,6 +169,21 @@ final class Player: ObservableObject {
                 self.reportPlaybackFailure(error)
             }
         }
+    }
+
+    private static func prepareWithBoundedRetries(_ track: Track) async throws -> PreparedPlayback {
+        var lastError: Error = PlaybackError.unavailable("无法播放当前歌曲")
+        for attempt in 0..<2 {
+            do { return try await PlaybackResolver.prepare(track: track, quality: .siteQuality) }
+            catch {
+                lastError = error
+                if Task.isCancelled { throw CancellationError() }
+                if (error as? PlaybackError)?.isUnplayable == true { break }
+                if attempt == 0 { try await Task.sleep(for: .milliseconds(350)) }
+            }
+        }
+        if (lastError as? PlaybackError)?.isUnplayable == true { throw lastError }
+        throw PlaybackError.unavailable("无法播放当前歌曲")
     }
 
     private func install(_ prepared: PreparedPlayback) {
@@ -251,7 +271,7 @@ final class Player: ObservableObject {
             resolveAudio(for: current, selection: selection)
             return
         }
-        reportPlaybackFailure(failure)
+        reportPlaybackFailure(failure, skipToNext: true)
     }
 
     private func clearEngine() {
@@ -268,24 +288,47 @@ final class Player: ObservableObject {
         if isPlaying { isPlaying = false }
     }
 
-    private func reportPlaybackFailure(_ error: Error) {
+    private func reportPlaybackFailure(_ error: Error, skipToNext: Bool = false) {
+        let definitive = (error as? PlaybackError)?.isUnplayable == true
         playbackFailed = true
-        if let urlError = error as? URLError, [.notConnectedToInternet, .networkConnectionLost, .timedOut].contains(urlError.code) {
-            playbackMessage = "网络连接异常，请检查网络后重试。"
+        wantsPlayback = false
+        if (error as? PlaybackError)?.isUnplayable == true {
+            playbackMessage = "此歌曲暂不可用"
+        } else if let urlError = error as? URLError, [.notConnectedToInternet, .networkConnectionLost, .timedOut].contains(urlError.code) {
+            playbackMessage = "无法播放当前歌曲"
         } else {
-            playbackMessage = PlaybackFailure.message(error)
+            playbackMessage = "无法播放当前歌曲"
         }
         Self.logger.error("Playback failed: \(String(reflecting: error as NSError), privacy: .private)")
         updateLockScreen()
-        guard (error as? PlaybackError)?.isUnplayable == true, wantsPlayback else { return }
+        if definitive {
+            if let current {
+                unavailableTrackIDs.insert(current.id)
+                playbackQueue.markUnavailable(current)
+                queue = playbackQueue.tracks
+            }
+        }
+        else if !skipToNext { wantsPlayback = false; return }
+        guard !queue.isEmpty else { wantsPlayback = false; return }
         consecutiveFailures += 1
-        guard consecutiveFailures <= 5 else { wantsPlayback = false; return }
-        // The website marks such a song and steps over it; do the same, once.
+        guard consecutiveFailures <= min(max(queue.count, 1), 5) else { playbackMessage = "无法播放当前歌曲"; wantsPlayback = false; return }
+        wantsPlayback = true
+        // Explicit unavailable tasks and mid-play AVPlayer failures advance;
+        // transient preparation errors stay visible and require a user retry.
         let selected = selection
+        let failureCount = consecutiveFailures
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
             guard let self, self.selection == selected else { return }
-            await self.next()
+            guard self.consecutiveFailures == failureCount else { return }
+            guard self.currentIndex + 1 < self.queue.count else {
+                self.wantsPlayback = false; self.playbackMessage = "无法播放当前歌曲"; return
+            }
+            self.currentIndex += 1
+            self.playbackQueue = PlaybackQueue(tracks: self.queue, startingAt: self.queue[self.currentIndex])
+            self.queue = self.playbackQueue.tracks
+            self.currentIndex = self.playbackQueue.index
+            self.prepareCurrent()
         }
     }
 
@@ -451,7 +494,7 @@ final class Player: ObservableObject {
     }
 
     private func loadLockScreenArtwork(for track: Track, selection selected: UUID) async {
-        guard let artworkURL = track.artwork,
+        guard let artworkURL = track.artworkURL(tier: "large"),
               let image = await ArtworkCache.shared.image(for: artworkURL, pixelSize: 512),
               !Task.isCancelled, selection == selected else { return }
         lockScreenArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }

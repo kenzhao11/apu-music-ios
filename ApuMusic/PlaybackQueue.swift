@@ -19,6 +19,11 @@ struct PlaybackQueue {
         index = self.tracks.firstIndex(of: track) ?? 0
     }
 
+    mutating func markUnavailable(_ track: Track) {
+        guard let position = tracks.firstIndex(of: track) else { return }
+        tracks[position].playable = false
+    }
+
     mutating func advance(shuffledIndex: Int? = nil, repeatsPlaylist: Bool = false) -> Track? {
         guard !tracks.isEmpty else { return nil }
         if let shuffledIndex {
