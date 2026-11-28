@@ -19,7 +19,7 @@ final class MusicModelTests: XCTestCase {
 
     func testSignedArtworkURLsKeepSignatureAndCredentialQueryParametersUnchanged() throws {
         for key in ["x-amz-credential", "x-amz-security-token", "x-goog-credential", "x-goog-security-token"] {
-            let raw = "https://p1.music.126.net/a.jpg?param=300y300&\\(key)=encoded%2Bcredential"
+            let raw = "https://p1.music.126.net/a.jpg?param=300y300&\(key)=encoded%2Bcredential"
             XCTAssertEqual(Track.artworkURL(raw, tier: "large")?.absoluteString, raw)
         }
     }
@@ -178,6 +178,69 @@ final class MusicModelTests: XCTestCase {
 
         XCTAssertEqual(queue.tracks.map(\.id), ["one", "three"])
         XCTAssertEqual(queue.advance(shuffledIndex: 1)?.id, "three")
+    }
+
+    func testQueueSkipsEightConsecutiveFailuresWithoutLosingPlayableTail() {
+        let tracks = (0..<9).map { track("song-\($0)") }
+        var queue = PlaybackQueue(tracks: tracks, startingAt: tracks[0])
+        var attempted = Set<String>()
+        for expected in tracks.dropLast() {
+            XCTAssertEqual(queue.current?.id, expected.id)
+            attempted.insert(expected.id)
+            queue.markUnavailable(expected)
+            XCTAssertNotNil(queue.advanceAfterFailure(attemptedIDs: attempted))
+        }
+        XCTAssertEqual(queue.current?.id, tracks.last?.id)
+        XCTAssertEqual(queue.tracks.count, tracks.count)
+    }
+
+    func testAllUnavailableQueueTerminatesWithoutWrappingOrReattempting() {
+        let tracks = (0..<8).map { track("song-\($0)") }
+        var queue = PlaybackQueue(tracks: tracks, startingAt: tracks[0])
+        var attempted = Set<String>()
+        for expected in tracks {
+            XCTAssertEqual(queue.current?.id, expected.id)
+            attempted.insert(expected.id)
+            queue.markUnavailable(expected)
+            let next = queue.advanceAfterFailure(attemptedIDs: attempted)
+            if expected.id == tracks.last?.id { XCTAssertNil(next) }
+            else { XCTAssertNotNil(next) }
+        }
+        XCTAssertNil(queue.advanceAfterFailure(attemptedIDs: attempted))
+        XCTAssertNil(queue.advanceAfterFailure(attemptedIDs: attempted))
+    }
+
+    func testSharedUnavailableIDsAreExcludedWhenRebuildingQueue() {
+        let tracks = [track("one"), track("two"), track("three")]
+        let queue = PlaybackQueue(tracks: tracks, startingAt: tracks[0], unavailableIDs: ["two"])
+        XCTAssertEqual(queue.tracks.map(\.id), ["one", "three"])
+        let rejected = PlaybackQueue(tracks: [tracks[1]], startingAt: tracks[1], unavailableIDs: ["two"])
+        XCTAssertTrue(rejected.isEmpty)
+        var unavailable = track("unavailable")
+        unavailable.playable = false
+        XCTAssertTrue(PlaybackQueue(tracks: [unavailable], startingAt: unavailable).isEmpty)
+    }
+
+    func testTransientFailuresAdvanceWithoutPermanentlyDisablingTracks() {
+        let tracks = [track("one"), track("two"), track("three")]
+        var queue = PlaybackQueue(tracks: tracks, startingAt: tracks[0])
+        XCTAssertEqual(queue.advanceAfterFailure(attemptedIDs: ["one", "two"])?.id, "three")
+        XCTAssertNil(queue.advanceAfterFailure(attemptedIDs: Set(tracks.map(\.id))))
+        XCTAssertTrue(queue.tracks.allSatisfy(\.canPlay))
+    }
+
+    @MainActor
+    func testArtworkPreviewReusesActualCachedListPixelsAtEveryScale() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com/medium.jpg"))
+        let other = try XCTUnwrap(URL(string: "https://example.com/other.jpg"))
+        let image = UIImage(systemName: "music.note")!
+        for pixels in [84, 126, 116, 174, 300] {
+            let cache = ArtworkCache()
+            cache.storeImage(image, for: url, pixelSize: pixels)
+            XCTAssertTrue(cache.cachedPreviewImage(for: url) === image)
+            XCTAssertNil(cache.cachedImage(for: url, pixelSize: 640))
+            XCTAssertNil(cache.cachedPreviewImage(for: other))
+        }
     }
 
     func testPlaylistQueueCanReorderAndKeepsCurrentSongSelected() {

@@ -13,10 +13,21 @@ struct PlaybackQueue {
         index = 0
     }
 
-    init(tracks: [Track], startingAt track: Track) {
-        let playable = tracks.filter(\.canPlay)
-        self.tracks = playable.isEmpty ? [track] : (playable.contains(track) ? playable : [track] + playable)
+    init(tracks: [Track], startingAt track: Track, excluding unavailableIDs: Set<String> = []) {
+        let playable = tracks.filter { $0.canPlay && !unavailableIDs.contains($0.id) }
+        self.tracks = playable
         index = self.tracks.firstIndex(of: track) ?? 0
+    }
+
+    mutating func advanceAfterFailure(attemptedIDs: Set<String>) -> Track? {
+        guard !tracks.isEmpty, index + 1 < tracks.count else { return nil }
+        for nextIndex in (index + 1)..<tracks.count {
+            let candidate = tracks[nextIndex]
+            guard candidate.canPlay, !attemptedIDs.contains(candidate.id) else { continue }
+            index = nextIndex
+            return candidate
+        }
+        return nil
     }
 
     mutating func markUnavailable(_ track: Track) {

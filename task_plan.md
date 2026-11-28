@@ -1,3 +1,59 @@
+# 阿噗音乐 iOS build 9 — 阶段计划（2026-11-28）
+
+## 最新续接裁决与返修设计（2026-11-28 12:43）
+- 唯一主需求仍为 Lead 指定 brief 开头最新裁决。92行先备份仅补空 cover 已授权；部署前须先由 Lead 转告接口/写库条件，不是重新申请功能授权。本轮不部署、不执行线上补图。
+- 已提交基线：iOS f8bd801、MHub d4d6fc6；原审核线程「审查：阿噗音乐 build9 本地实现」完整ID `9a662953-27fc-4542-98eb-dc527c5c262e`，只在此续审。
+- 最新审核四项根因已核实：签名用例把插值写成字面量；缓存精确尺寸查询仅补126不能覆盖@2x；失败后缩队列再用长度作门限会提前停止；新队列未排除共享不可播集合。
+- 最小修法：修正用例插值（不删/弱化断言）；缓存按URL索引实际已缓存尺寸，预览不发网络且仍保留精确高清键；队列失败按未尝试ID单向推进、不重建缩队列、不按固定5次截断；所有新建队列排除共享不可播ID，并在点击/预取/续曲入口守卫。
+- 先补 XCTest 覆盖连续8首失败后仍到可播尾曲、全失败有界结束、共享集合不重新入队、84/126及其他列表尺寸缓存复用。依本次豁免不运行Swift/XCTest、不装Swift、不跑云测试；固定审核逐行检查，审核通过后才仅打包。
+- Node已有最终定向17/17、全量96/96日志（`build9-review-green-targeted-final.log` / `build9-review-green-final.log`），不把旧95/95或人工样本日志作为最终证据。后端本轮无变化，不重跑已完成测试。
+
+## 当前任务唯一主交付
+基于build8，仅修封面缺失、播放失败、清晰度，交付build9。2026-11-28 07:50续派已允许本地实施：Node直接测试真实生产Worker/D1逻辑先红后绿；Swift豁免红绿但须审核逐行走查，禁止安装Swift、云端任何测试、模拟器/手机操作。允许新增封面provider详情补查、两源备用匹配、D1空cover安全回写与92首一次性补图脚本（先备份/干跑）。**后端部署与线上补图执行仍待Ken单独批准，不得提前执行。** 所有原始证据保留，不重采搜索混样本。历史build8计划保留于后半。
+
+## 阶段1设计与实施门（本次新授权覆盖下文历史阻塞）
+1. 建独立fix/build9分支；保留两仓已有脏文件，限定源码/测试/脚本文件。
+2. 先定位真实provider歌曲/专辑详情路径与返回schema，用source_id实测，URL档位下载解码验证，严禁猜接口。缺cover：同源详情 -> 名称/歌手精确匹配其他两源一次 -> 无图负缓存/统一占位。
+3. 对生产Worker逻辑加Node用例并先跑红，记录原输出；实现后同用例及旧测试全部绿，不改旧断言。
+4. D1写入只限`cover`，按id+source/source_id身份与cover仍为空限制；不覆盖非空/不碰Spotify artwork。92首脚本需固定ID白名单、执行前导出备份、干跑统计及WHERE验证；此轮只准备不执行。
+5. 输出层64/300/640（不支持640选已实测最近更大）与fallback源URL，不批量改D1。iOS按场景、分档缓存、小图先显/高清替换，详情一次补查，统一占位；错误类别/精确提示/队列有界跳过，取消防串状态。
+6. 播放聚焦原22个API失败：重试 -> 降音质 -> 同歌两备用源；暂态和确定不可播分开，本地注入测试，不能冒充AVPlayer验证。
+7. 同原360行快照/92首回放与各源像素报告；本地API回放与实际线上/真机分开。
+8. 完成本地实施/红绿后先报Lead接口/写路径/部署范围，并暂停等部署授权；开发自行直送审核开发在固定审核线程逐条审（Swift逐行）。未经审结/后续授权不打包、不合并。
+
+## 范围与固定采样口径
+- 允许按上文07:50新授权修改相关后端源码，线上部署/写入另等授权；其余线上D1只读，不改整体布局/无关页面，不操作Ken手机。
+- 禁止云端模拟器、XCTest、真机；Windows 无 Xcode；CI 仅可在后续授权时作编译打包，不代表真机验收。
+- 每词独立调用一次 `GET https://kenmusic.kdns.fr/api/v1/search?q=<关键词>&limit=50`，保留原数组顺序和每个逐词完整原始 JSON，不跨词去重；缺封面指 cover 缺失/null/空串；明确不可播仅严格 `playable == false`；null 不推断。响应/HTTP 错误单独计数。
+- 初始阶段另对本机 MHub SQLite mirror 抽样10图，结果保留但明确非正式D1。后续补证已只读查询线上 D1 (mhub-db)：对原344 unique search catalog IDs、92 distinct empty-cover IDs 执行 SELECT；读回 metadata `changed_db=false`、`rows_written=0`。另固定抽 Spotify-liked playlist positions 0–9 的真实D1封面。
+- API可取音频/HTTP206、图片下载、静态代码检查均不能冒充 iOS AVPlayer/SwiftUI/Spotify iOS真机表现；完整签名音频URL不落盘/不共享。
+
+## 阶段门
+1. [x] 读 `ios/REGRESSIONS.md`、项目任务/交付记录、相关生产代码；保留 build8 原计划和工作树既有脏文件。
+2. [x] 确认基线：仓库 `D:/Projects/apu-music-ios`，`main` HEAD/origin/main = `6700764bf20af1445080083716a83d60b27200bb`；build8 package run `44891936200`、artifact `14702596685` 均对应 SHA `420e5bb3e7ba02ee60b06d835185bfb434a27f1d`，success。
+3. [x] 对10个关键词实际 GET；按原数组次序逐词计数。原API空封面100行、明确`playable=false` 0行、同词重复(platform,id)0；100行CSV和逐词脱敏JSON保存。
+4. [x] 对原快照344 unique ID只读join线上D1：360行全匹配且platform/source_id一致；origin=search 331、rematch 13。92 unique空封面行来源全部 origin=search，netease74/tencent16/kugou2。对92行逐一查现有D1 detail endpoint，92次HTTP200但cover仍空。
+5. [x] 对真正线上Spotify曲库固定前10个D1行下载并解码：`supplement/d1-library-artwork-private.json`，全部300x300。旧本机mirror十图保留为分开样本。
+6. [x] 对92 unique空封面行按build8请求参数实时查播放API，低并发2；61完成且Range 206、31后端failed（23 deadline timeout、4 QQ cookie风险、4无audio_url）；此非AVPlayer验证。基线/来源/层级/失败明细及平台能力见 `supplement/PHASE0-SUPPLEMENT.md`。
+7. [x] 确认真实生产Swift XCTest本地执行阻塞：Windows及WSL无Swift/Xcode、云XCTest被禁。须Ken批准在本地Mac/Xcode跑，或授权本机安装standalone Swift toolchain测可移植生产逻辑；默认不安装、不跑CI，不改业务实现。
+8. [ ] 等Lead转报并等待获准Swift测试环境/续派后，先直接执行生产Swift逻辑测试真红，再修复真绿；不得以脚本替代、删旧测试/跳测试/改断言。
+9. [ ] 审核开发只读审核通过后按授权发布流程打包；精确记录CI SHA/IPA/来源与逐项对照。Ken真机验收与AVPlayer行为分开标注。
+
+## build9 阶段进展（2026-11-28 07:50续派）
+- Ken选项：无Mac/不安装Swift/不跑云端测试；Swift红绿豁免，审核开发逐行走查；允许Worker相关实现，以Node真实Worker/D1逻辑先红后绿。本机只跑该Worker Node测试；后端部署与线上补92空封面操作仍单独等Ken批准。
+- 新分支 `fix/build9-artwork-playback` 已在两仓创建，开始新增Worker provider cover查找、D1空cover guarded update、尺寸URL helper与质量low retry。后端detail路径由live API与本地 provider源码证实：Netease `/api/v3/song/detail`、QQ `/cgi-bin/musicu.fcg` 的 `get_song_detail_yqq`、Kugou已用`getSongInfo.php?cmd=playInfo&hash`（该样本image字段仍空）。provider尺寸像素实测证据保存在MHub仓`implementation-evidence/provider-reference/`。尚未核实完整三来源640的可取像素，不能让helper把不可用url误报640。
+- 新测试 `tests/build9-artwork.test.mjs`：先在真实Worker逻辑运行，provider详情/限定SQL/low-quality/retry-fallback用例原始失败，修复后更新响应schema与夹具。当前7/7新增测试通过；生产逻辑及既有测试 `npm test` 84/84全绿（完整日志见`C:/Users/kenzh/hark_tasks/mhub-cloud/implementation-evidence/build9-npm-test-final.log`）。此仅为MHub Worker Node测试；Swift改动因Ken豁免红绿，等审核逐行走查；无Xcode/IPA。
+- 线上D1 `origin='search' AND cover空` 92行已READ-ONLY导出：`implementation-evidence/build9-original-92-backup.json` 92 unique ID，SHA256 `f078642fe769976598e5063a0ea8565d064ebc2c06d98d53c4c7654160890ea6`，wrangler meta `rows_written=0`。执行过本地provider detail只读，候选清单`build9-92-provider-cover-candidates.json`，92行中75实际有图(网易74/Kugou1)、17空(酷狗1/QQ16)。像素实际检查75张结果`build9-92-candidate-pixels.json`。脚本`build9-backfill-covers.mjs`强制匹配备份hash，拒绝任何备份外/非search/Spotify/nonempty row，产物`build9-backfill-dryrun-final.json`仅SQL计划、75 distinct updates only cover、source/id/source_id/origin/Spotify/cover-empty guard；`d1_write_performed=false`。计划尚不保证Ken批量补图批准，绝不执行。
+- 已有两仓本地分支：`fix/build9-artwork-playback`；MHub仅改`src/index.js`,`src/search.js`,`src/sources.js`,`src/library.js`及`tests/build9-artwork.test.mjs`,`scripts/build9-backfill-covers.mjs`；未碰已脏`_work/`。iOS只改Models/ArtworkCache/ApuMusicApp/Player，共4源文件；构建号仍8，未编译。
+- 2026-11-28 10:04续接最终本地阶段：Worker回归89/89通过（日志`C:/Users/kenzh/hark_tasks/mhub-cloud/implementation-evidence/build9-npm-test-final.log`），其中固定原始snapshot的同生产helper回放安全测试5/5通过（safety log），新封面/quality/source/fallback定向测试7/7通过。红灯原始历史`build9-feature-tests-red.log`需确认存在；未以当前红日志覆盖。测试验证包括signed URL原样保留、拒绝Kugou placeholder与javascript URL、row identity/非cover不变、并发cover更新空值guard。92行备份与执行SQL计划已双向sha/WHERE校验，计划75写仅改cover、17跳过，绝无执行。
+- Pixel实际样本：网易source picture请求param64/300/640解码均分别64/300/640；QQ path120/300/800解码分别一致，640格式未图；Kugou单源模板变更目录参数仍解码480。Spotify CDN图片token替换同id实测300默认与0000b273=640/00004851=64。不能将URL请求Tier误报为每首供应源都达标。IPA受限于hosting、尚未build。
+- Swift本次豁免测试，无Swift compiler；文件`Models.swift/ArtworkCache.swift/ApuMusicApp.swift/Player.swift/PlaybackResolver.swift`只纳入审核逐行走查/获准package-only编译，未声称iOS通过。build号仍8。
+- **部署闸：**目前Worker候选源码包括`src/search.js`（网易/QQ/Kugou详情reader、负缓存、strict title/artist两源封面匹配、搜索层输出、固定快照helper与仅cover受guard回写）、`src/index.js`（`GET /api/v1/tracks/{platform}/{id}?refresh_cover=1&artwork_size=<small|medium|large>`、playback URL错误分类），`src/sources.js`（上游高->低质量重试）、`src/library.js`（非playable状态标志）；新增`tests/build9-artwork.test.mjs`,`tests/build9-safety.test.mjs`,`scripts/build9-backfill-covers.mjs`。D1唯一预期写路径是SQL `UPDATE tracks SET cover=? WHERE id=? AND source=? AND source_id=? AND origin='search' AND spotify_id='' AND (cover IS NULL OR cover='')`；搜索页与GET detail会在请求内通过这个守卫惰性回填cover。一次性92备份计划75行同guard，仍未运行。以上部署会带入实时外部provider详情/搜索读及D1空cover写入，即使不一次性刷库也会写少量空封面行；需Lead先请Ken就上述部署及惰性写路径明确许可。未授权前不部署/更新Workers，未授权的一次性92回填也不执行。
+- 代码审阅必须针对最终变更/branch；审核开发线程尚未创建，开发须到获部署许可并review-ready时按原审核ID直送。本地package-only与IPA还未请求/运行。
+- 下一步：已具备本地Node生产Worker绿灯及全套回归、D1写计划干跑及实像素候选；阶段阶段实现未commit。现在将精确接口和写路径回报Lead等部署审批；另复核90?（当前92ID唯一）覆盖数据固定样本输出同快照比较。获准后完成部署分支本地审查清理、只执行用户授权的D1脚本、对同快照验收，最终再送审核，package-only构建build9。严格不要启动测试CI。
+
+---
+
 # 阿噗音乐 下载/播放修复 任务计划（任务 owner：开发一）
 
 ## 目标（唯一主交付物）

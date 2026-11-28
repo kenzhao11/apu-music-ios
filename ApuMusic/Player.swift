@@ -70,6 +70,7 @@ final class Player: ObservableObject {
     private var selectedAt = ContinuousClock.now
     private var loggedStart = false
     private var prefetchTrackID: String?
+    private var attemptedFailureIDs = Set<String>()
     private var consecutiveFailures = 0
     private var networkPlaybackRetries = 0
     private var activePlaybackTaskID = ""
@@ -105,9 +106,14 @@ final class Player: ObservableObject {
     }
 
     func setQueue(_ tracks: [Track], start: Track) {
-        playbackQueue = PlaybackQueue(tracks: tracks, startingAt: start)
+        attemptedFailureIDs.removeAll()
+        playbackQueue = PlaybackQueue(tracks: tracks, startingAt: start, excluding: unavailableTrackIDs)
         queue = playbackQueue.tracks
         currentIndex = playbackQueue.index
+        guard !queue.isEmpty else {
+            markUnavailable(start)
+            return
+        }
         prepareCurrent()
     }
 
@@ -310,8 +316,8 @@ final class Player: ObservableObject {
         }
         else if !skipToNext { wantsPlayback = false; return }
         guard !queue.isEmpty else { wantsPlayback = false; return }
+        if let current { attemptedFailureIDs.insert(current.id) }
         consecutiveFailures += 1
-        guard consecutiveFailures <= min(max(queue.count, 1), 5) else { playbackMessage = "无法播放当前歌曲"; wantsPlayback = false; return }
         wantsPlayback = true
         // Explicit unavailable tasks and mid-play AVPlayer failures advance;
         // transient preparation errors stay visible and require a user retry.
@@ -321,13 +327,13 @@ final class Player: ObservableObject {
             try? await Task.sleep(for: .seconds(1))
             guard let self, self.selection == selected else { return }
             guard self.consecutiveFailures == failureCount else { return }
-            guard self.currentIndex + 1 < self.queue.count else {
-                self.wantsPlayback = false; self.playbackMessage = "无法播放当前歌曲"; return
+            guard self.playbackQueue.advanceAfterFailure(attemptedIDs: self.attemptedFailureIDs) != nil else {
+                self.wantsPlayback = false
+                self.playbackMessage = "无法播放当前歌曲"
+                return
             }
-            self.currentIndex += 1
-            self.playbackQueue = PlaybackQueue(tracks: self.queue, startingAt: self.queue[self.currentIndex])
-            self.queue = self.playbackQueue.tracks
             self.currentIndex = self.playbackQueue.index
+            self.queue = self.playbackQueue.tracks
             self.prepareCurrent()
         }
     }
@@ -391,7 +397,7 @@ final class Player: ObservableObject {
                 await appendContinuation(selection: selected)
                 guard selection == selected else { return }
                 guard let current else { pause(); return }
-                playbackQueue = PlaybackQueue(tracks: queue, startingAt: current)
+                playbackQueue = PlaybackQueue(tracks: queue, startingAt: current, excluding: unavailableTrackIDs)
                 guard playbackQueue.advance() != nil else { pause(); return }
             }
         }
@@ -403,7 +409,7 @@ final class Player: ObservableObject {
         if progress.timing.position > 3 { seek(to: 0); return }
         guard !queue.isEmpty else { return }
         currentIndex = (currentIndex - 1 + queue.count) % queue.count
-        playbackQueue = PlaybackQueue(tracks: queue, startingAt: queue[currentIndex])
+        playbackQueue = PlaybackQueue(tracks: queue, startingAt: queue[currentIndex], excluding: unavailableTrackIDs)
         prepareCurrent()
     }
 

@@ -1060,7 +1060,7 @@ struct Artwork: View {
             let pixels = Int((size * UIScreen.main.scale).rounded())
             if let fallbackURL {
                 fallbackImage = ArtworkCache.shared.cachedImage(for: fallbackURL, pixelSize: pixels)
-                    ?? ArtworkCache.shared.cachedImage(for: fallbackURL, pixelSize: 126)
+                    ?? ArtworkCache.shared.cachedPreviewImage(for: fallbackURL)
             }
             var primaryURL = url
             if primaryURL == nil, let track { primaryURL = await ArtworkCache.shared.artworkURL(for: track, tier: size >= 240 ? "large" : "medium") }

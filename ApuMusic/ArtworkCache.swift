@@ -12,8 +12,9 @@ final class ArtworkCache {
     private var detailCoverURLs: [String: URL] = [:]
     private var detailCoverMisses: [String: Date] = [:]
     private var detailCoverTasks: [String: Task<URL?, Never>] = [:]
+    private var previewKeysByURL: [String: [String]] = [:]
 
-    private init() {
+    init() {
         memory.totalCostLimit = 32 * 1024 * 1024
         let configuration = URLSessionConfiguration.default
         configuration.urlCache = URLCache(memoryCapacity: 8 * 1024 * 1024,
@@ -56,6 +57,22 @@ final class ArtworkCache {
         return memory.object(forKey: "\(bucket):\(pixelSize):\(url.absoluteString)" as NSString)
     }
 
+    func cachedPreviewImage(for url: URL) -> UIImage? {
+        let keys = previewKeysByURL[url.absoluteString] ?? []
+        return keys.compactMap { memory.object(forKey: $0 as NSString) }
+            .max { ($0.cgImage?.width ?? 0) < ($1.cgImage?.width ?? 0) }
+    }
+
+    func storeImage(_ image: UIImage, for url: URL, pixelSize: Int) {
+        let bucket = pixelSize >= 500 ? 640 : (pixelSize >= 200 ? 300 : 64)
+        let key = "\(bucket):\(pixelSize):\(url.absoluteString)"
+        let cost = (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0)
+        memory.setObject(image, forKey: key as NSString, cost: cost)
+        var keys = previewKeysByURL[url.absoluteString, default: []].filter { memory.object(forKey: $0 as NSString) != nil && $0 != key }
+        keys.append(key)
+        previewKeysByURL[url.absoluteString] = keys
+    }
+
     func image(for url: URL, pixelSize: Int) async -> UIImage? {
         guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return nil }
         let bucket = pixelSize >= 500 ? 640 : (pixelSize >= 200 ? 300 : 64)
@@ -81,7 +98,7 @@ final class ArtworkCache {
         let image = await pending.value
         inFlight[key] = nil
         if let image, let bitmap = image.cgImage {
-            memory.setObject(image, forKey: key as NSString, cost: bitmap.bytesPerRow * bitmap.height)
+            storeImage(image, for: url, pixelSize: pixelSize)
         } else {
             imageMisses[key] = Date()
             if imageMisses.count > 1000 { imageMisses = imageMisses.filter { Date().timeIntervalSince($0.value) < 300 } }
