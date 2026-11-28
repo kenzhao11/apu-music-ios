@@ -1,0 +1,13 @@
+本地固定审核前源码核对（非 XCTest/Swift 编译）
+日期：2026-11-28
+范围：PlaybackQueue.swift、Player.swift、MusicModelTests.swift、ios/REGRESSIONS.md、task_plan.md
+
+实际检查：
+- XCTest 新增队列用例的 PlaybackQueue 初始化参数统一为签名中的 excluding:。
+- 正常下一首、随机、repeat、previous、prefetch 全走队列 advance/retreat 的 bounded scan；advance 与 retreat 均最多检查 tracks.count 个候选且只选 canPlay 项。
+- Player.previous 不再在过滤队列后持有旧 queue/currentIndex；从 playbackQueue.retreat() 后同步 tracks/index 再准备当前曲。
+- prepareCurrent 再次拒绝 !canPlay 或共享 unavailableTrackIDs 项；续曲 append 排除不可播/共享不可播并去重；prefetch 使用队列值类型副本，不移动实际游标。
+- 未修改或删除旧测试断言。签名 URL 的四个测试键均使用 Swift 插值 \(key)。
+- git diff --check：通过（退出码0）。
+
+边界：按Ken裁决未安装Swift/Xcode，未运行Swift/XCTest、iOS编译、模拟器或真机；本文件仅记录静态源码核对，不能视为编译/测试通过。未部署、未写线上D1、未打包。

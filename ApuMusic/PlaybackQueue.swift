@@ -39,15 +39,42 @@ struct PlaybackQueue {
         guard !tracks.isEmpty else { return nil }
         if let shuffledIndex {
             guard tracks.indices.contains(shuffledIndex) else { return nil }
-            index = shuffledIndex
-        } else if index + 1 < tracks.count {
-            index += 1
-        } else if repeatsPlaylist {
-            index = 0
+            for offset in 0..<tracks.count {
+                let candidateIndex = (shuffledIndex + offset) % tracks.count
+                guard tracks[candidateIndex].canPlay else { continue }
+                index = candidateIndex
+                return current
+            }
         } else {
-            return nil
+            for offset in 1...tracks.count {
+                let candidateIndex = index + offset
+                if candidateIndex >= tracks.count && !repeatsPlaylist { break }
+                let wrappedIndex = candidateIndex % tracks.count
+                guard tracks[wrappedIndex].canPlay else { continue }
+                index = wrappedIndex
+                return current
+            }
         }
-        return current
+        return nil
+    }
+
+    mutating func retreat() -> Track? {
+        guard !tracks.isEmpty else { return nil }
+        for offset in 1...tracks.count {
+            let candidateIndex = (index - offset + tracks.count) % tracks.count
+            guard tracks[candidateIndex].canPlay else { continue }
+            index = candidateIndex
+            return current
+        }
+        return nil
+    }
+
+    mutating func append(_ candidates: [Track], excluding unavailableIDs: Set<String> = []) {
+        var known = Set(tracks)
+        for candidate in candidates where candidate.canPlay && !unavailableIDs.contains(candidate.id) {
+            guard known.insert(candidate).inserted else { continue }
+            tracks.append(candidate)
+        }
     }
 
     mutating func move(from source: IndexSet, to destination: Int) {

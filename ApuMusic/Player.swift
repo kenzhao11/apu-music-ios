@@ -120,6 +120,11 @@ final class Player: ObservableObject {
     private func prepareCurrent() {
         guard queue.indices.contains(currentIndex) else { return }
         let track = queue[currentIndex]
+        guard track.canPlay, !isUnavailable(track) else {
+            pause()
+            markUnavailable(track)
+            return
+        }
         preparation?.cancel()
         prefetchTask?.cancel()
         prefetchTrackID = nil
@@ -222,6 +227,7 @@ final class Player: ObservableObject {
                 if playing {
                     if !self.startedPlaying {
                         self.consecutiveFailures = 0
+                        self.attemptedFailureIDs.removeAll()
                         self.prefetchNextTrack()
                     }
                     self.startedPlaying = true
@@ -390,14 +396,13 @@ final class Player: ObservableObject {
     func next() async {
         guard !queue.isEmpty else { return }
         if shuffled {
-            _ = playbackQueue.advance(shuffledIndex: Int.random(in: queue.indices))
+            guard let randomIndex = playbackQueue.tracks.indices.filter({ playbackQueue.tracks[$0].canPlay }).randomElement(),
+                  playbackQueue.advance(shuffledIndex: randomIndex) != nil else { pause(); return }
         } else {
             if playbackQueue.advance(repeatsPlaylist: repeatMode == 1) == nil {
                 let selected = selection
                 await appendContinuation(selection: selected)
                 guard selection == selected else { return }
-                guard let current else { pause(); return }
-                playbackQueue = PlaybackQueue(tracks: queue, startingAt: current, excluding: unavailableTrackIDs)
                 guard playbackQueue.advance() != nil else { pause(); return }
             }
         }
@@ -408,8 +413,9 @@ final class Player: ObservableObject {
     func previous() async {
         if progress.timing.position > 3 { seek(to: 0); return }
         guard !queue.isEmpty else { return }
-        currentIndex = (currentIndex - 1 + queue.count) % queue.count
-        playbackQueue = PlaybackQueue(tracks: queue, startingAt: queue[currentIndex], excluding: unavailableTrackIDs)
+        guard playbackQueue.retreat() != nil else { pause(); return }
+        queue = playbackQueue.tracks
+        currentIndex = playbackQueue.index
         prepareCurrent()
     }
 
@@ -432,8 +438,9 @@ final class Player: ObservableObject {
         guard let response: ContinueResponse = try? await MusicAPI.post("recommendations/continue", body: request),
               selection == selected else { return }
         station = response.station ?? station
-        let known = Set(queue)
-        queue.append(contentsOf: response.tracks.filter { $0.canPlay && !known.contains($0) })
+        playbackQueue.append(response.tracks, excluding: unavailableTrackIDs)
+        queue = playbackQueue.tracks
+        currentIndex = playbackQueue.index
     }
     func move(from source: IndexSet, to destination: Int) {
         playbackQueue.move(from: source, to: destination)
@@ -465,10 +472,9 @@ final class Player: ObservableObject {
 
     private func prefetchNextTrack() {
         guard !shuffled, repeatMode != 2 else { return }
-        let nextIndex = currentIndex + 1 < queue.count ? currentIndex + 1 : 0
-        guard nextIndex != currentIndex, nextIndex != 0 || repeatMode == 1 else { return }
-        let next = queue[nextIndex]
-        guard next.canPlay else { return }
+        var previewQueue = playbackQueue
+        guard let next = previewQueue.advance(repeatsPlaylist: repeatMode == 1),
+              next.id != current?.id, !isUnavailable(next) else { return }
         guard prefetchTrackID != next.id else { return }
         let key = Self.cacheKey(track: next)
         if let cached = prefetched, cached.key == key, cached.time.duration(to: .now) < .seconds(120) { return }

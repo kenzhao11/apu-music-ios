@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import ApuMusic
 
 final class MusicModelTests: XCTestCase {
@@ -212,13 +213,81 @@ final class MusicModelTests: XCTestCase {
 
     func testSharedUnavailableIDsAreExcludedWhenRebuildingQueue() {
         let tracks = [track("one"), track("two"), track("three")]
-        let queue = PlaybackQueue(tracks: tracks, startingAt: tracks[0], unavailableIDs: ["two"])
+        let queue = PlaybackQueue(tracks: tracks, startingAt: tracks[0], excluding: ["two"])
         XCTAssertEqual(queue.tracks.map(\.id), ["one", "three"])
-        let rejected = PlaybackQueue(tracks: [tracks[1]], startingAt: tracks[1], unavailableIDs: ["two"])
+        let rejected = PlaybackQueue(tracks: [tracks[1]], startingAt: tracks[1], excluding: ["two"])
         XCTAssertTrue(rejected.isEmpty)
         var unavailable = track("unavailable")
         unavailable.playable = false
         XCTAssertTrue(PlaybackQueue(tracks: [unavailable], startingAt: unavailable).isEmpty)
+    }
+
+    func testNormalAdvanceSkipsRuntimeUnavailableTracksWithoutShrinkingQueue() {
+        let tracks = [track("one"), track("two"), track("three")]
+        var queue = PlaybackQueue(tracks: tracks, startingAt: tracks[0])
+        queue.markUnavailable(tracks[1])
+        XCTAssertEqual(queue.advance()?.id, "three")
+        XCTAssertEqual(queue.index, 2)
+        XCTAssertEqual(queue.tracks.count, 3)
+        XCTAssertNil(queue.advance())
+    }
+
+    func testRepeatAdvanceSkipsUnavailableHeadAndStopsWhenAllUnavailable() {
+        let tracks = [track("one"), track("two"), track("three")]
+        var queue = PlaybackQueue(tracks: tracks, startingAt: tracks[2])
+        queue.markUnavailable(tracks[0])
+        XCTAssertEqual(queue.advance(repeatsPlaylist: true)?.id, "two")
+        queue.markUnavailable(tracks[1])
+        XCTAssertEqual(queue.advance(repeatsPlaylist: true)?.id, "three")
+        queue.markUnavailable(tracks[2])
+        XCTAssertNil(queue.advance(repeatsPlaylist: true))
+        XCTAssertEqual(queue.index, 2)
+    }
+
+    func testShuffleAdvanceSkipsUnavailableTargetAndIsBounded() {
+        let tracks = [track("one"), track("two"), track("three")]
+        var queue = PlaybackQueue(tracks: tracks, startingAt: tracks[2])
+        queue.markUnavailable(tracks[0])
+        XCTAssertEqual(queue.advance(shuffledIndex: 0)?.id, "two")
+        XCTAssertEqual(queue.index, 1)
+        XCTAssertNil(queue.advance(shuffledIndex: 99))
+        queue.markUnavailable(tracks[1])
+        queue.markUnavailable(tracks[2])
+        XCTAssertNil(queue.advance(shuffledIndex: 0))
+    }
+
+    func testPreviousSkipsRuntimeUnavailableAndKeepsArrayAndIndexAligned() {
+        let tracks = [track("one"), track("two"), track("three")]
+        var queue = PlaybackQueue(tracks: tracks, startingAt: tracks[1])
+        queue.markUnavailable(tracks[0])
+        XCTAssertEqual(queue.retreat()?.id, "three")
+        XCTAssertEqual(queue.index, 2)
+        XCTAssertEqual(queue.tracks[queue.index].id, queue.current?.id)
+        XCTAssertEqual(queue.retreat()?.id, "two")
+        queue.markUnavailable(tracks[1])
+        queue.markUnavailable(tracks[2])
+        XCTAssertNil(queue.retreat())
+    }
+
+    func testPrefetchSelectionUsesSameUnavailableSkipWithoutMovingActualQueue() {
+        let tracks = [track("one"), track("two"), track("three")]
+        var queue = PlaybackQueue(tracks: tracks, startingAt: tracks[0])
+        queue.markUnavailable(tracks[1])
+        var preview = queue
+        XCTAssertEqual(preview.advance()?.id, "three")
+        XCTAssertEqual(queue.current?.id, "one")
+        XCTAssertEqual(queue.index, 0)
+    }
+
+    func testContinuationAfterUnavailableCurrentKeepsCursorBeforeNewTail() {
+        let tracks = [track("one"), track("two"), track("three")]
+        var queue = PlaybackQueue(tracks: [tracks[0]], startingAt: tracks[0])
+        queue.markUnavailable(tracks[0])
+        queue.append([tracks[0], tracks[1], tracks[2], tracks[2]], excluding: ["two"])
+        XCTAssertEqual(queue.tracks.map(\.id), ["one", "three"])
+        XCTAssertEqual(queue.index, 0)
+        XCTAssertEqual(queue.advance()?.id, "three")
+        XCTAssertNil(queue.advance())
     }
 
     func testTransientFailuresAdvanceWithoutPermanentlyDisablingTracks() {
