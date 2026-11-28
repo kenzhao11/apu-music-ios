@@ -17,6 +17,13 @@ final class MusicModelTests: XCTestCase {
         XCTAssertFalse(tracks[3].canPlay)
     }
 
+    func testSignedArtworkURLsKeepSignatureAndCredentialQueryParametersUnchanged() throws {
+        for key in ["x-amz-credential", "x-amz-security-token", "x-goog-credential", "x-goog-security-token"] {
+            let raw = "https://p1.music.126.net/a.jpg?param=300y300&\\(key)=encoded%2Bcredential"
+            XCTAssertEqual(Track.artworkURL(raw, tier: "large")?.absoluteString, raw)
+        }
+    }
+
     func testPlaybackRequestUsesServerFieldNames() throws {
         let request = PlaybackRequest(platform: "tencent", query: "Hello", selectedId: "2138", quality: "standard")
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])

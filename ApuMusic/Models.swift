@@ -67,6 +67,16 @@ enum MusicAPI {
         return try await playbackResponse(for: request)
     }
 
+    static func trackDetail(platform: String, id: String) async throws -> Track {
+        var components = URLComponents(url: try endpoint("tracks/\(platform)/\(id)"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [.init(name: "refresh_cover", value: "1"), .init(name: "artwork_size", value: "large")]
+        var request = URLRequest(url: components.url!, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        request.httpShouldHandleCookies = true
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+        return try JSONDecoder().decode(Track.self, from: data)
+    }
+
     static func searchTracks(_ query: String) async throws -> [Track] {
         var components = URLComponents(url: try endpoint("search"), resolvingAgainstBaseURL: false)!
         components.queryItems = [.init(name: "q", value: query), .init(name: "limit", value: "50")]
@@ -118,6 +128,9 @@ enum MusicAPI {
                 throw URLError(.badServerResponse)
             }
             let payload = try? JSONDecoder().decode(PlaybackAPIError.self, from: data)
+            if payload?.errorCode == "unplayable" && payload?.timeout != true {
+                throw PlaybackError.unplayable(payload?.detail ?? payload?.error ?? "此歌曲暂不可用")
+            }
             throw PlaybackError.unavailable(PlaybackFailure.message(
                 URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: payload?.detail ?? payload?.error ?? ""])))
         }
@@ -132,6 +145,9 @@ enum MusicAPI {
 private struct PlaybackAPIError: Decodable {
     var detail: String?
     var error: String?
+    var errorCode: String?
+    var timeout: Bool?
+    enum CodingKeys: String, CodingKey { case detail, error, timeout; case errorCode = "error_code" }
 }
 
 enum PlaybackError: LocalizedError {
@@ -277,26 +293,45 @@ struct Track: Codable, Identifiable, Hashable {
         if !platform.isEmpty, !candidates.contains(primary) { candidates.insert(primary, at: 0) }
         return candidates
     }
-    var artwork: URL? { cover.flatMap(URL.init(string:)) }
-    var thumbnail: URL? {
-        guard let artwork else { return nil }
-        guard var parts = URLComponents(url: artwork, resolvingAgainstBaseURL: false) else { return artwork }
-        var path = parts.path
-        for size in ["1200x1200", "1000x1000", "800x800", "600x600", "500x500", "400x400", "300x300"] {
-            path = path.replacingOccurrences(of: size, with: "240x240")
+    var artwork: URL? { Self.artworkURL(cover, tier: nil) }
+    func artworkURL(tier: String) -> URL? { Self.artworkURL(cover, tier: tier) }
+    static func artworkURL(_ value: String?, tier: String?) -> URL? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty,
+              var parts = URLComponents(string: value), let host = parts.host?.lowercased(),
+              ["http", "https"].contains(parts.scheme?.lowercased() ?? ""), parts.user == nil, parts.password == nil else { return nil }
+        let original = parts.url
+        let signedKeys = ["rs", "sig", "sign", "signature", "token", "auth", "expires", "x-amz-signature", "x-amz-credential", "x-amz-security-token", "x-goog-signature", "x-goog-credential", "x-goog-security-token"]
+        if (parts.queryItems ?? []).contains(where: { signedKeys.contains($0.name.lowercased()) }) {
+            if parts.scheme?.lowercased() == "http" { parts.scheme = "https" }
+            return parts.url ?? original
         }
-        parts.path = path
-        if ["y.gtimg.cn", "isure.stream.qqmusic.qq.com"].contains(parts.host ?? "") {
-            var query = parts.queryItems ?? []
-            if let size = query.firstIndex(where: { $0.name == "size" }) {
-                query[size].value = "240"
-            } else {
-                query.append(URLQueryItem(name: "size", value: "240"))
-            }
-            parts.queryItems = query
+        parts.scheme = "https"
+        guard let tier else { return parts.url }
+        let target = tier == "large" ? 640 : (tier == "small" ? 64 : 300)
+        func replace(_ pattern: String, _ replacement: String) {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
+            parts.path = regex.stringByReplacingMatches(in: parts.path, range: NSRange(parts.path.startIndex..., in: parts.path), withTemplate: replacement)
         }
+        if host == "y.gtimg.cn" {
+            let size = target >= 640 ? 800 : (target < 200 ? 120 : 300)
+            replace(#"T002R\d+x\d+M000([^/]+)\.jpg$"#, "T002R\(size)x\(size)M000$1.jpg")
+        } else if host == "music.126.net" || host.hasSuffix(".music.126.net") {
+            var items = parts.queryItems ?? []
+            items.removeAll { $0.name == "param" }
+            items.append(.init(name: "param", value: "\(target)y\(target)"))
+            parts.queryItems = items
+        } else if host == "imge.kugou.com" {
+            replace(#"/(stdmusic(?:_v2)?)/\d+/"#, "/$1/\(target)/")
+        } else if host == "spotifycdn.com" || host.hasSuffix(".spotifycdn.com") || host == "scdn.co" || host.hasSuffix(".scdn.co") {
+            let token = target >= 640 ? "0000b273" : (target < 200 ? "00004851" : "00001e02")
+            replace(#"/image/(ab67616d)[0-9a-f]{8}([0-9a-f]{24})$"#, "/image/$1\(token)$2")
+        } else if host == "i.ytimg.com" {
+            let file = target >= 640 ? "maxresdefault.jpg" : (target >= 300 ? "hqdefault.jpg" : "default.jpg")
+            replace(#"/(default|mqdefault|hqdefault|sddefault|maxresdefault)\.jpg$"#, "/\(file)")
+        } else { return original }
         return parts.url
     }
+    var thumbnail: URL? { artworkURL(tier: "medium") }
 
     static func == (lhs: Track, rhs: Track) -> Bool {
         lhs.id == rhs.id
@@ -564,8 +599,12 @@ struct PlaybackTask: Decodable {
     var format: String?
     var errorCode: String?
     var error: String?
+    var reason: String?
+    var timeout: Bool?
+    var unavailableStatus: String?
     enum CodingKeys: String, CodingKey {
-        case id, status, error, quality, format, bitrate, duration, platform
+        case id, status, error, quality, format, bitrate, duration, platform, reason, timeout
+        case unavailableStatus = "availability_status"
         case trackId = "track_id"
         case selectedId = "selected_id"
         case byteSize = "byte_size"
@@ -600,7 +639,18 @@ struct PlaybackTask: Decodable {
         format = try container.decodeIfPresent(String.self, forKey: .format)
         errorCode = try container.decodeIfPresent(String.self, forKey: .errorCode)
         error = try container.decodeIfPresent(String.self, forKey: .error)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        timeout = try container.decodeIfPresent(Bool.self, forKey: .timeout)
+        unavailableStatus = try container.decodeIfPresent(String.self, forKey: .unavailableStatus)
+
     }
+
+    var isDefinitivelyUnplayable: Bool {
+        if unavailableStatus == "temporary" || timeout == true { return false }
+        if unavailableStatus == "unavailable" { return true }
+        return status == "failed" && errorCode == "unplayable"
+    }
+    var isRetryableFailure: Bool { unavailableStatus == "temporary" || status == "retryable" || errorCode == "temporary" || timeout == true }
 
     /// App.vue:339-348 `waitForReady`, for the app's own player: a completed
     /// task is ready, and a growing task only when the website considers its
@@ -641,14 +691,29 @@ struct PlaybackStatusResponse: Decodable {
     var task: PlaybackTask
     init(from decoder: Decoder) throws {
         if let container = try? decoder.container(keyedBy: CodingKeys.self),
-           let wrapped = try container.decodeIfPresent(PlaybackTask.self, forKey: .task)
+           var wrapped = try container.decodeIfPresent(PlaybackTask.self, forKey: .task)
             ?? container.decodeIfPresent(PlaybackTask.self, forKey: .playback) {
+            if let envelope = try? container.decode(PlaybackEnvelope.self, forKey: .playback) {
+                wrapped.unavailableStatus = envelope.availabilityStatus ?? wrapped.unavailableStatus
+                wrapped.timeout = envelope.timeout ?? wrapped.timeout
+                wrapped.reason = envelope.reason ?? wrapped.reason
+                wrapped.errorCode = envelope.errorCode ?? wrapped.errorCode
+                wrapped.error = envelope.error ?? wrapped.error
+            }
             task = wrapped
         } else {
             task = try PlaybackTask(from: decoder)
         }
     }
     private enum CodingKeys: String, CodingKey { case task, playback }
+}
+private struct PlaybackEnvelope: Decodable {
+    var availabilityStatus: String?
+    var errorCode: String?
+    var error: String?
+    var reason: String?
+    var timeout: Bool?
+    enum CodingKeys: String, CodingKey { case error, reason, timeout; case availabilityStatus = "availability_status"; case errorCode = "error_code" }
 }
 struct Lyrics: Decodable {
     var available: Bool
